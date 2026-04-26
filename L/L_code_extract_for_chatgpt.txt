@@ -1,0 +1,931 @@
+===== 文件路径 =====
+c:\Users\Lu\Desktop\新建文件夹 (5)\l_bridge_tool_gui.py
+
+===== 采集按钮 clicked.connect 相关行 =====
+0787:         self.capture_help_btn = QtWidgets.QPushButton("采集测试说明")
+0797:         self.capture_input_btn = QtWidgets.QPushButton("采集编程工具输入框")
+0798:         self.capture_send_btn = QtWidgets.QPushButton("采集发送按钮")
+0799:         self.capture_delete_btn = QtWidgets.QPushButton("采集删除/确认按钮")
+0800:         self.capture_sandbox_btn = QtWidgets.QPushButton("采集后台沙箱按钮")
+0801:         self.capture_coder_copy_btn = QtWidgets.QPushButton("采集编程工具复制按钮")
+0802:         self.capture_gpt_input_btn = QtWidgets.QPushButton("采集ChatGPT输入框")
+0803:         self.capture_gpt_send_btn = QtWidgets.QPushButton("采集ChatGPT发送按钮")
+0983:         self.capture_input_btn.clicked.connect(lambda: self.capture_template("input"))
+0984:         self.capture_send_btn.clicked.connect(lambda: self.capture_template("send"))
+0985:         self.capture_delete_btn.clicked.connect(lambda: self.capture_template("delete"))
+0986:         self.capture_sandbox_btn.clicked.connect(lambda: self.capture_template("sandbox"))
+0987:         self.capture_coder_copy_btn.clicked.connect(lambda: self.capture_template("coder_copy"))
+0988:         self.capture_gpt_input_btn.clicked.connect(lambda: self.capture_template("gpt_input"))
+0989:         self.capture_gpt_send_btn.clicked.connect(lambda: self.capture_template("gpt_send"))
+0991:         self.capture_help_btn.clicked.connect(self.show_capture_help)
+
+===== class WindowedRegionSelector =====
+0293: class WindowedRegionSelector(QtWidgets.QDialog):
+0294:     def __init__(self, screenshot, prompt, screenshot_pil=None, log_fn=None):
+0295:         super().__init__()
+0296:         self.screenshot = screenshot
+0297:         self.screenshot_pil = screenshot_pil
+0298:         self.prompt = prompt
+0299:         self.start_point = None
+0300:         self.end_point = None
+0301:         self.is_selecting = False
+0302:         self.selection_rect = QtCore.QRect()
+0303:         self.log_fn = log_fn
+0304:         
+0305:         # 设置窗口标题和大小
+0306:         self.setWindowTitle("请选择模板区域")
+0307:         
+0308:         # 获取屏幕可用区域
+0309:         screen = QtWidgets.QApplication.primaryScreen()
+0310:         available_geometry = screen.availableGeometry()
+0311:         max_width = int(available_geometry.width() * 0.9)
+0312:         max_height = int(available_geometry.height() * 0.9)
+0313:         
+0314:         # 转换截图为 QImage（优先使用 PIL 转 QPixmap，保证稳定）
+0315:         if self.screenshot_pil is not None:
+0316:             pm = pil_image_to_qpixmap(self.screenshot_pil, log_fn=self.log_fn)
+0317:             if not pm.isNull():
+0318:                 self.q_image = pm.toImage()
+0319:                 self.original_width = self.q_image.width()
+0320:                 self.original_height = self.q_image.height()
+0321:             else:
+0322:                 screenshot_rgb = cv2.cvtColor(self.screenshot, cv2.COLOR_BGR2RGB)
+0323:                 self.original_height, self.original_width, _ = screenshot_rgb.shape
+0324:                 self.q_image = QtGui.QImage(
+0325:                     screenshot_rgb.data,
+0326:                     self.original_width,
+0327:                     self.original_height,
+0328:                     3 * self.original_width,
+0329:                     QtGui.QImage.Format_RGB888
+0330:                 )
+0331:         else:
+0332:             screenshot_rgb = cv2.cvtColor(self.screenshot, cv2.COLOR_BGR2RGB)
+0333:             self.original_height, self.original_width, _ = screenshot_rgb.shape
+0334:             self.q_image = QtGui.QImage(
+0335:                 screenshot_rgb.data,
+0336:                 self.original_width,
+0337:                 self.original_height,
+0338:                 3 * self.original_width,
+0339:                 QtGui.QImage.Format_RGB888
+0340:             )
+0341:         
+0342:         # 计算缩放比例
+0343:         self.scale_factor = min(
+0344:             (max_width - 40) / self.original_width,
+0345:             (max_height - 80) / self.original_height,
+0346:             1.0
+0347:         )
+0348:         
+0349:         # 计算显示尺寸
+0350:         self.display_width = int(self.original_width * self.scale_factor)
+0351:         self.display_height = int(self.original_height * self.scale_factor)
+0352:         
+0353:         # 设置窗口大小
+0354:         self.resize(self.display_width + 40, self.display_height + 80)
+0355:         self.setMinimumSize(600, 400)
+0356:         
+0357:         # 创建布局
+0358:         layout = QtWidgets.QVBoxLayout()
+0359:         
+0360:         # 添加说明标签
+0361:         help_label = QtWidgets.QLabel("拖拽选择区域，Enter确认，ESC取消")
+0362:         help_label.setStyleSheet("font-weight: bold; color: #333;")
+0363:         layout.addWidget(help_label)
+0364:         
+0365:         # 添加图片显示区域
+0366:         self.label = QtWidgets.QLabel()
+0367:         self.label.setAlignment(QtCore.Qt.AlignCenter)
+0368:         self.label.setMinimumSize(500, 300)
+0369:         
+0370:         # 缩放图片
+0371:         self.scaled_pixmap = QtGui.QPixmap.fromImage(self.q_image).scaled(
+0372:             self.display_width, 
+0373:             self.display_height, 
+0374:             QtCore.Qt.KeepAspectRatio, 
+0375:             QtCore.Qt.SmoothTransformation
+0376:         )
+0377:         self.label.setPixmap(self.scaled_pixmap)
+0378:         
+0379:         # 设置鼠标跟踪
+0380:         self.label.setMouseTracking(True)
+0381:         self.label.mousePressEvent = self.mousePressEvent
+0382:         self.label.mouseMoveEvent = self.mouseMoveEvent
+0383:         self.label.mouseReleaseEvent = self.mouseReleaseEvent
+0384:         
+0385:         layout.addWidget(self.label)
+0386:         
+0387:         # 添加信息标签
+0388:         self.info_label = QtWidgets.QLabel("请开始选择区域")
+0389:         self.info_label.setStyleSheet("color: #666;")
+0390:         layout.addWidget(self.info_label)
+0391:         
+0392:         self.setLayout(layout)
+0393:         
+0394:         # 记录日志
+0395:         print(f"原图尺寸: {self.original_width}x{self.original_height}")
+0396:         print(f"显示尺寸: {self.display_width}x{self.display_height}")
+0397:         print(f"缩放比例: {self.scale_factor:.2f}")
+0398:     
+0399:     def mousePressEvent(self, event):
+0400:         if event.button() == QtCore.Qt.LeftButton:
+0401:             self.start_point = event.pos()
+0402:             self.end_point = event.pos()
+0403:             self.is_selecting = True
+0404:             self.update()
+0405:     
+0406:     def mouseMoveEvent(self, event):
+0407:         if self.is_selecting:
+0408:             self.end_point = event.pos()
+0409:             self.update()
+0410:     
+0411:     def mouseReleaseEvent(self, event):
+0412:         if event.button() == QtCore.Qt.LeftButton:
+0413:             self.is_selecting = False
+0414:             self.end_point = event.pos()
+0415:             
+0416:             # 计算选择区域（相对于显示图片）
+0417:             x = min(self.start_point.x(), self.end_point.x())
+0418:             y = min(self.start_point.y(), self.end_point.y())
+0419:             width = abs(self.end_point.x() - self.start_point.x())
+0420:             height = abs(self.end_point.y() - self.start_point.y())
+0421:             
+0422:             # 转换为原始图片坐标
+0423:             original_x = int(x / self.scale_factor)
+0424:             original_y = int(y / self.scale_factor)
+0425:             original_width = int(width / self.scale_factor)
+0426:             original_height = int(height / self.scale_factor)
+0427:             
+0428:             self.selection_rect = QtCore.QRect(
+0429:                 original_x, original_y, original_width, original_height
+0430:             )
+0431:             
+0432:             # 显示信息
+0433:             self.info_label.setText(
+0434:                 f"选择区域: {original_width}x{original_height} "
+0435:                 f"(原始坐标: {original_x},{original_y})"
+0436:             )
+0437:             
+0438:             # 记录日志
+0439:             print(f"选择坐标 (显示): x={x}, y={y}, w={width}, h={height}")
+0440:             print(f"裁剪坐标 (原始): x={original_x}, y={original_y}, w={original_width}, h={original_height}")
+0441:             
+0442:             self.update()
+0443:     
+0444:     def paintEvent(self, event):
+0445:         super().paintEvent(event)
+0446:         if self.is_selecting and self.start_point and self.end_point:
+0447:             painter = QtGui.QPainter(self)
+0448:             painter.setPen(QtGui.QPen(QtGui.QColor(255, 0, 0), 2))
+0449:             
+0450:             # 计算选择矩形
+0451:             x = min(self.start_point.x(), self.end_point.x())
+0452:             y = min(self.start_point.y(), self.end_point.y())
+0453:             width = abs(self.end_point.x() - self.start_point.x())
+0454:             height = abs(self.end_point.y() - self.start_point.y())
+0455:             
+0456:             # 绘制选择框
+0457:             rect = QtCore.QRect(
+0458:                 self.label.pos().x() + x,
+0459:                 self.label.pos().y() + y,
+0460:                 width,
+0461:                 height
+0462:             )
+0463:             painter.drawRect(rect)
+0464:             
+0465:             # 绘制半透明填充
+0466:             brush = QtGui.QBrush(QtGui.QColor(255, 0, 0, 50))
+0467:             painter.setBrush(brush)
+0468:             painter.drawRect(rect)
+0469:             
+0470:             # 绘制尺寸信息
+0471:             painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255), 1))
+0472:             text = f"{width}x{height}"
+0473:             painter.drawText(rect.topLeft() + QtCore.QPoint(10, 20), text)
+0474:     
+0475:     def keyPressEvent(self, event):
+0476:         if event.key() == QtCore.Qt.Key_Escape:
+0477:             self.reject()
+0478:         elif event.key() == QtCore.Qt.Key_Return or event.key() == QtCore.Qt.Key_Enter:
+0479:             if self.selection_rect.width() >= 10 and self.selection_rect.height() >= 10:
+0480:                 self.accept()
+0481:             else:
+0482:                 QtWidgets.QMessageBox.warning(
+0483:                     self, "警告", "选择区域过小，请重新选择"
+0484:                 )
+0485: 
+
+===== class RegionSelector =====
+0486: class RegionSelector(QtWidgets.QWidget):
+0487:     def __init__(self, screenshot, screenshot_pil=None, log_fn=None):
+0488:         super().__init__()
+0489:         self.screenshot = screenshot
+0490:         self.screenshot_pil = screenshot_pil
+0491:         self.start_point = None
+0492:         self.end_point = None
+0493:         self.is_selecting = False
+0494:         self.log_fn = log_fn
+0495: 
+0496:         screen = QtWidgets.QApplication.primaryScreen()
+0497:         self.setGeometry(screen.geometry())
+0498:         self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+0499:         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+0500: 
+0501:         self.pixmap = self.convert_screenshot_to_pixmap()
+0502:         self.selection_rect = QtCore.QRect()
+0503:         self.cancelled = False
+0504: 
+0505:     def convert_screenshot_to_pixmap(self):
+0506:         if self.screenshot_pil is not None:
+0507:             pm = pil_image_to_qpixmap(self.screenshot_pil, log_fn=self.log_fn)
+0508:             if not pm.isNull():
+0509:                 return pm
+0510:         screenshot_rgb = cv2.cvtColor(self.screenshot, cv2.COLOR_BGR2RGB)
+0511:         height, width, channel = screenshot_rgb.shape
+0512:         bytes_per_line = 3 * width
+0513:         q_image = QtGui.QImage(screenshot_rgb.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888)
+0514:         return QtGui.QPixmap.fromImage(q_image)
+0515: 
+0516:     def paintEvent(self, event):
+0517:         painter = QtGui.QPainter(self)
+0518:         painter.drawPixmap(self.rect(), self.pixmap)
+0519: 
+0520:         if self.is_selecting and self.start_point and self.end_point:
+0521:             painter.setPen(QtGui.QPen(QtGui.QColor(0, 255, 0), 2))
+0522:             rect = QtCore.QRect(self.start_point, self.end_point).normalized()
+0523:             painter.drawRect(rect)
+0524: 
+0525:             brush = QtGui.QBrush(QtGui.QColor(0, 255, 0, 50))
+0526:             painter.setBrush(brush)
+0527:             painter.drawRect(rect)
+0528: 
+0529:             painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255), 1))
+0530:             text = f"选择区域: {rect.width()} x {rect.height()}"
+0531:             painter.drawText(rect.topLeft() + QtCore.QPoint(10, 20), text)
+0532: 
+0533:     def mousePressEvent(self, event):
+0534:         if event.button() == QtCore.Qt.LeftButton:
+0535:             self.start_point = event.pos()
+0536:             self.end_point = event.pos()
+0537:             self.is_selecting = True
+0538:             self.update()
+0539: 
+0540:     def mouseMoveEvent(self, event):
+0541:         if self.is_selecting:
+0542:             self.end_point = event.pos()
+0543:             self.update()
+0544: 
+0545:     def mouseReleaseEvent(self, event):
+0546:         if event.button() == QtCore.Qt.LeftButton:
+0547:             self.is_selecting = False
+0548:             self.end_point = event.pos()
+0549:             self.selection_rect = QtCore.QRect(self.start_point, self.end_point).normalized()
+0550:             if self.selection_rect.width() < 10 or self.selection_rect.height() < 10:
+0551:                 self.cancelled = True
+0552:             self.close()
+0553: 
+0554:     def keyPressEvent(self, event):
+0555:         if event.key() == QtCore.Qt.Key_Escape:
+0556:             self.cancelled = True
+0557:             self.close()
+0558: 
+0559: 
+
+===== class ProfileManager =====
+0161: class ProfileManager:
+0162:     def __init__(self):
+0163:         self.current_profile = None
+0164:         self.profiles = {}
+0165:         self.profile_queues = {}
+0166:         self.ensure_default_profiles()
+0167:         if self.profiles:
+0168:             self.current_profile = list(self.profiles.keys())[0]
+0169:         self.load_profile_config(self.current_profile)
+0170: 
+0171:     def ensure_default_profiles(self):
+0172:         try:
+0173:             PROFILES_DIR.mkdir(exist_ok=True)
+0174:             for profile_name in DEFAULT_PROFILES:
+0175:                 profile_path = PROFILES_DIR / profile_name
+0176:                 if not profile_path.exists():
+0177:                     profile_path.mkdir(parents=True, exist_ok=True)
+0178:                 if profile_name not in self.profiles:
+0179:                     self.profiles[profile_name] = profile_path
+0180:                 if profile_name not in self.profile_queues:
+0181:                     self.profile_queues[profile_name] = Queue()
+0182:         except Exception as e:
+0183:             print(f"创建默认配置失败: {e}")
+0184: 
+0185:     def get_template_path(self, template_name):
+0186:         if not self.current_profile:
+0187:             return None
+0188:         return self.profiles.get(self.current_profile) / template_name
+0189: 
+0190:     def get_profile_dir(self):
+0191:         if not self.current_profile:
+0192:             return None
+0193:         return self.profiles.get(self.current_profile)
+0194: 
+0195:     def create_profile(self, name):
+0196:         try:
+0197:             if not name or not name.strip():
+0198:                 return False, "配置名称不能为空"
+0199:             illegal_chars = r'[<>:"/\\|?*]'
+0200:             if re.search(illegal_chars, name):
+0201:                 return False, "配置名称包含非法字符"
+0202:             name = name.strip()
+0203:             if name in self.profiles:
+0204:                 return False, "配置名称已存在"
+0205:             profile_path = PROFILES_DIR / name
+0206:             profile_path.mkdir(parents=True, exist_ok=True)
+0207:             self.profiles[name] = profile_path
+0208:             self.profile_queues[name] = Queue()
+0209:             self.save_profile_config(name)
+0210:             return True, f"配置 '{name}' 创建成功"
+0211:         except Exception as e:
+0212:             return False, f"创建配置失败: {str(e)}"
+0213: 
+0214:     def delete_profile(self, name):
+0215:         try:
+0216:             if len(self.profiles) <= 1:
+0217:                 return False, "至少保留一个配置"
+0218:             if name not in self.profiles:
+0219:                 return False, "配置不存在"
+0220:             if name == self.current_profile:
+0221:                 return False, "不能删除当前配置"
+0222:             profile_path = self.profiles[name]
+0223:             try:
+0224:                 import shutil
+0225:                 shutil.rmtree(profile_path)
+0226:             except:
+0227:                 pass
+0228:             del self.profiles[name]
+0229:             del self.profile_queues[name]
+0230:             return True, f"配置 '{name}' 已删除"
+0231:         except Exception as e:
+0232:             return False, f"删除配置失败: {str(e)}"
+0233: 
+0234:     def switch_profile(self, name):
+0235:         try:
+0236:             if name not in self.profiles:
+0237:                 return False, "配置不存在"
+0238:             self.current_profile = name
+0239:             self.load_profile_config(name)
+0240:             return True, f"已切换到配置 '{name}'"
+0241:         except Exception as e:
+0242:             return False, f"切换配置失败: {str(e)}"
+0243: 
+0244:     def get_config_path(self, name=None):
+0245:         if not name:
+0246:             name = self.current_profile
+0247:         if name and name in self.profiles:
+0248:             return self.profiles[name] / "config.json"
+0249:         return None
+0250: 
+0251:     def load_profile_config(self, name):
+0252:         try:
+0253:             config_path = self.get_config_path(name)
+0254:             if config_path and config_path.exists():
+0255:                 with open(config_path, 'r', encoding='utf-8') as f:
+0256:                     return json.load(f)
+0257:             return {"safe_mode": True, "gpt_safe_mode": True}
+0258:         except Exception as e:
+0259:             return {"safe_mode": True, "gpt_safe_mode": True}
+0260: 
+0261:     def save_profile_config(self, name=None, delete_keywords=None, sandbox_keywords=None):
+0262:         try:
+0263:             if not name:
+0264:                 name = self.current_profile
+0265:             config_path = self.get_config_path(name)
+0266:             if not config_path:
+0267:                 return
+0268:             config = {
+0269:                 "safe_mode": getattr(self, 'safe_mode', True),
+0270:                 "gpt_safe_mode": getattr(self, 'gpt_safe_mode', True)
+0271:             }
+0272:             if delete_keywords is not None:
+0273:                 config["delete_keywords"] = delete_keywords
+0274:             if sandbox_keywords is not None:
+0275:                 config["sandbox_keywords"] = sandbox_keywords
+0276:             with open(config_path, 'w', encoding='utf-8') as f:
+0277:                 json.dump(config, f, ensure_ascii=False, indent=2)
+0278:         except Exception as e:
+0279:             print(f"保存配置失败: {e}")
+0280: 
+0281:     def get_queue(self, name=None):
+0282:         if not name:
+0283:             name = self.current_profile
+0284:         if name not in self.profile_queues:
+0285:             self.profile_queues[name] = Queue()
+0286:         return self.profile_queues[name]
+0287: 
+0288: profile_manager = ProfileManager()
+0289: 
+
+===== def capture_template =====
+1409:     def capture_template(self, template_type):
+1410:         template_map = {
+1411:             "input": ("input_box_template.png", "请选择编程工具的输入框"),
+1412:             "send": ("send_button_template.png", "请选择编程工具的发送按钮"),
+1413:             "delete": ("delete_popup.png", "请选择删除/确认按钮"),
+1414:             "sandbox": ("sandbox_button.png", "请选择后台沙箱按钮"),
+1415:             "coder_copy": ("coder_copy_button.png", "请选择编程工具的复制结果按钮"),
+1416:             "gpt_input": ("gpt_input_box.png", "请选择 ChatGPT 的输入框"),
+1417:             "gpt_send": ("gpt_send_button.png", "请选择 ChatGPT 的发送按钮")
+1418:         }
+1419: 
+1420:         template_info = template_map.get(template_type)
+1421:         if not template_info:
+1422:             self.log(f"未知的模板类型: {template_type}")
+1423:             return
+1424: 
+1425:         template_name, prompt = template_info
+1426:         
+1427:         try:
+1428:             self.log(f"准备采集: {template_name}")
+1429:             
+1430:             # 获取当前采集模式
+1431:             capture_mode = self.capture_mode_combo.currentData()
+1432:             self.log(f"当前采集模式: {capture_mode}")
+1433:             
+1434:             # 显示确认框
+1435:             reply = QtWidgets.QMessageBox.question(
+1436:                 self,
+1437:                 "采集模板确认",
+1438:                 f"{prompt}\n\n请选择屏幕上的目标区域，按 ESC 取消。\n\n是否继续？",
+1439:                 QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+1440:                 QtWidgets.QMessageBox.Yes
+1441:             )
+1442:             
+1443:             if reply != QtWidgets.QMessageBox.Yes:
+1444:                 self.log(f"采集已取消: {template_name}")
+1445:                 return
+1446:             
+1447:             # 隐藏主窗口
+1448:             self.log(f"隐藏主窗口，准备截图")
+1449:             self.hide()
+1450:             
+1451:             # 等待 800ms
+1452:             time.sleep(0.8)
+1453:             
+1454:             # 截取当前屏幕
+1455:             try:
+1456:                 screenshot_pil = capture_screen_pil(log_fn=self.log)
+1457:                 if screenshot_pil is None:
+1458:                     raise RuntimeError("capture_screen_pil 返回 None")
+1459:                 rgb = np.array(screenshot_pil.convert("RGB"))
+1460:                 screenshot = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+1461:                 self.log(f"截图成功，尺寸: {screenshot.shape[1]}x{screenshot.shape[0]}，后端: {LAST_SCREENSHOT_BACKEND}")
+1462:             except Exception as e:
+1463:                 self.show()
+1464:                 self.log(f"截图失败: {str(e)}")
+1465:                 self.set_error(f"截图失败: {str(e)}")
+1466:                 return
+1467:             
+1468:             # 恢复主窗口
+1469:             self.show()
+1470:             
+1471:             # 根据采集模式选择不同的采集方式
+1472:             if capture_mode == "window":
+1473:                 # 使用窗口化采集
+1474:                 self.log("使用窗口化截图采集模式")
+1475:                 selector = WindowedRegionSelector(screenshot, prompt, screenshot_pil=screenshot_pil, log_fn=self.log)
+1476:                 if selector.exec_() == QtWidgets.QDialog.Accepted:
+1477:                     rect = selector.selection_rect
+1478:                     self.log(f"选择区域: x={rect.x()}, y={rect.y()}, w={rect.width()}, h={rect.height()}")
+1479:                     
+1480:                     # 检查区域大小
+1481:                     if rect.width() < 10 or rect.height() < 10:
+1482:                         self.log(f"选择区域过小，采集取消: {template_name}")
+1483:                         self.set_error("选择区域过小，请重新选择")
+1484:                         return
+1485:                     
+1486:                     # 裁剪截图
+1487:                     try:
+1488:                         # 确保坐标在有效范围内
+1489:                         height, width = screenshot.shape[:2]
+1490:                         x1 = max(0, rect.x())
+1491:                         y1 = max(0, rect.y())
+1492:                         x2 = min(width, rect.x() + rect.width())
+1493:                         y2 = min(height, rect.y() + rect.height())
+1494:                         
+1495:                         if x1 >= x2 or y1 >= y2:
+1496:                             raise ValueError("无效的选择区域")
+1497:                         
+1498:                         cropped = screenshot[y1:y2, x1:x2]
+1499:                         self.log(f"裁剪成功，尺寸: {cropped.shape[1]}x{cropped.shape[0]}")
+1500:                     except Exception as e:
+1501:                         self.log(f"裁剪失败: {str(e)}")
+1502:                         self.set_error(f"裁剪失败: {str(e)}")
+1503:                         return
+1504:                     
+1505:                     # 保存模板
+1506:                     try:
+1507:                         profile_dir = profile_manager.get_profile_dir()
+1508:                         if not profile_dir:
+1509:                             raise ValueError("无法获取配置目录")
+1510:                         
+1511:                         template_path = profile_dir / template_name
+1512:                         cv2.imwrite(str(template_path), cropped)
+1513:                         self.log(f"模板保存成功: {template_path}")
+1514:                     except Exception as e:
+1515:                         self.log(f"保存失败: {str(e)}")
+1516:                         self.set_error(f"保存失败: {str(e)}")
+1517:                         return
+1518:                     
+1519:                     # 刷新模板状态和预览
+1520:                     self.refresh_template_status()
+1521:                     self.log(f"模板采集成功: {template_name}")
+1522:                 else:
+1523:                     self.log(f"采集已取消: {template_name}")
+1524:             else:
+1525:                 # 使用全屏透明采集
+1526:                 self.log("使用全屏透明采集模式")
+1527:                 selector = RegionSelector(screenshot, screenshot_pil=screenshot_pil, log_fn=self.log)
+1528:                 selector.exec_()
+1529:                 
+1530:                 # 检查是否取消
+1531:                 if selector.cancelled:
+1532:                     self.log(f"采集已取消: {template_name}")
+1533:                     return
+1534:                 
+1535:                 # 获取选择区域
+1536:                 rect = selector.selection_rect
+1537:                 self.log(f"选择区域: x={rect.x()}, y={rect.y()}, w={rect.width()}, h={rect.height()}")
+1538:                 
+1539:                 # 检查区域大小
+1540:                 if rect.width() < 10 or rect.height() < 10:
+1541:                     self.log(f"选择区域过小，采集取消: {template_name}")
+1542:                     self.set_error("选择区域过小，请重新选择")
+1543:                     return
+1544:                 
+1545:                 # 裁剪截图
+1546:                 try:
+1547:                     # 确保坐标在有效范围内
+1548:                     height, width = screenshot.shape[:2]
+1549:                     x1 = max(0, rect.x())
+1550:                     y1 = max(0, rect.y())
+1551:                     x2 = min(width, rect.x() + rect.width())
+1552:                     y2 = min(height, rect.y() + rect.height())
+1553:                     
+1554:                     if x1 >= x2 or y1 >= y2:
+1555:                         raise ValueError("无效的选择区域")
+1556:                     
+1557:                     cropped = screenshot[y1:y2, x1:x2]
+1558:                     self.log(f"裁剪成功，尺寸: {cropped.shape[1]}x{cropped.shape[0]}")
+1559:                 except Exception as e:
+1560:                     self.log(f"裁剪失败: {str(e)}")
+1561:                     self.set_error(f"裁剪失败: {str(e)}")
+1562:                     return
+1563:                 
+1564:                 # 保存模板
+1565:                 try:
+1566:                     profile_dir = profile_manager.get_profile_dir()
+1567:                     if not profile_dir:
+1568:                         raise ValueError("无法获取配置目录")
+1569:                     
+1570:                     template_path = profile_dir / template_name
+1571:                     cv2.imwrite(str(template_path), cropped)
+1572:                     self.log(f"模板保存成功: {template_path}")
+1573:                 except Exception as e:
+1574:                     self.log(f"保存失败: {str(e)}")
+1575:                     self.set_error(f"保存失败: {str(e)}")
+1576:                     return
+1577:                 
+1578:                 # 刷新模板状态和预览
+1579:                 self.refresh_template_status()
+1580:                 self.log(f"模板采集成功: {template_name}")
+1581:             
+1582:         except Exception as e:
+1583:             self.show()
+1584:             self.log(f"采集失败: {str(e)}")
+1585:             self.set_error(f"采集失败: {str(e)}")
+1586: 
+
+===== def capture_input_box_template =====
+2972:     def capture_input_box_template(self):
+2973:         try:
+2974:             self.capture_template("input_box_template.png", "请选择编程工具的输入框")
+2975:         except Exception as e:
+2976:             self.log(f"采集输入框模板失败: {str(e)}")
+2977: 
+
+===== def capture_send_button_template =====
+2978:     def capture_send_button_template(self):
+2979:         try:
+2980:             self.capture_template("send_button_template.png", "请选择编程工具的发送按钮")
+2981:         except Exception as e:
+2982:             self.log(f"采集发送按钮模板失败: {str(e)}")
+2983: 
+
+===== def capture_delete_popup_template =====
+未找到
+
+===== def capture_sandbox_button_template =====
+未找到
+
+===== def capture_coder_copy_button_template =====
+2984:     def capture_coder_copy_button_template(self):
+2985:         try:
+2986:             self.capture_template("coder_copy_button.png", "请选择编程工具的复制结果按钮")
+2987:         except Exception as e:
+2988:             self.log(f"采集编程复制按钮模板失败: {str(e)}")
+2989: 
+
+===== def capture_gpt_input_box_template =====
+2990:     def capture_gpt_input_box_template(self):
+2991:         try:
+2992:             self.capture_template("gpt_input_box.png", "请选择 ChatGPT 的输入框")
+2993:         except Exception as e:
+2994:             self.log(f"采集GPT输入框模板失败: {str(e)}")
+2995: 
+
+===== def capture_gpt_send_button_template =====
+2996:     def capture_gpt_send_button_template(self):
+2997:         try:
+2998:             self.capture_template("gpt_send_button.png", "请选择 ChatGPT 的发送按钮")
+2999:         except Exception as e:
+3000:             self.log(f"采集GPT发送按钮模板失败: {str(e)}")
+3001: 
+
+===== def refresh_template_status =====
+1339:     def refresh_template_status(self):
+1340:         self.clear_error()
+1341:         profile_dir = profile_manager.get_profile_dir()
+1342: 
+1343:         templates_status = [
+1344:             ("input_box_template.png", self.input_status_label, self.input_preview_label),
+1345:             ("send_button_template.png", self.send_status_label, self.send_preview_label),
+1346:             ("delete_popup.png", self.delete_status_label, self.delete_preview_label),
+1347:             ("sandbox_button.png", self.sandbox_status_label, self.sandbox_preview_label),
+1348:             ("coder_copy_button.png", self.coder_copy_status_label, self.coder_copy_preview_label),
+1349:             ("gpt_input_box.png", self.gpt_input_status_label, self.gpt_input_preview_label),
+1350:             ("gpt_send_button.png", self.gpt_send_status_label, self.gpt_send_preview_label),
+1351:         ]
+1352: 
+1353:         for template_name, status_label, preview_label in templates_status:
+1354:             if profile_dir:
+1355:                 template_path = profile_dir / template_name
+1356:             else:
+1357:                 template_path = None
+1358: 
+1359:             if template_path and template_path.exists():
+1360:                 status_label.setText(f"{template_name.split('_')[0]}: 已采集")
+1361:                 status_label.setStyleSheet("color: green;")
+1362:                 self.update_preview_image(preview_label, template_path)
+1363:             else:
+1364:                 short_name = template_name.split('_')[0]
+1365:                 status_label.setText(f"{short_name}: 未采集")
+1366:                 status_label.setStyleSheet("color: orange;")
+1367:                 preview_label.setText("未采集")
+1368:                 preview_label.setAlignment(QtCore.Qt.AlignCenter)
+1369: 
+1370:         self.update_profile_display()
+1371:         self.wizard_update_display()
+1372:         self.update_next_step_hint()
+1373: 
+
+===== def update_next_step_hint =====
+3002:     def update_next_step_hint(self):
+3003:         try:
+3004:             if not self.向导_skipped and self.向导_step < len(self.wizard_steps()):
+3005:                 steps = self.wizard_steps()
+3006:                 step_info = steps[self.向导_step - 1]
+3007:                 self.next_step_label.setText(f"向导下一步: {step_info['title']} - {step_info['description']}")
+3008:                 self.next_step_label.setStyleSheet("background-color: #FFF3E0; padding: 10px; border-radius: 5px; font-weight: bold;")
+3009:             else:
+3010:                 # 原来的下一步提示逻辑
+3011:                 profile_dir = profile_manager.get_profile_dir()
+3012:                 if not profile_dir:
+3013:                     self.next_step_label.setText("下一步：请选择或新建项目配置")
+3014:                     self.next_step_label.setStyleSheet("background-color: #E3F2FD; padding: 10px; border-radius: 5px; font-weight: bold;")
+3015:                     return
+3016: 
+3017:                 input_template = profile_dir / "input_box_template.png"
+3018:                 send_template = profile_dir / "send_button_template.png"
+3019:                 coder_copy_template = profile_dir / "coder_copy_button.png"
+3020:                 gpt_input_template = profile_dir / "gpt_input_box.png"
+3021: 
+3022:                 if not input_template.exists():
+3023:                     self.next_step_label.setText("下一步：采集编程工具输入框")
+3024:                 elif not coder_copy_template.exists():
+3025:                     self.next_step_label.setText("下一步：采集编程工具复制结果按钮")
+3026:                 elif not gpt_input_template.exists():
+3027:                     self.next_step_label.setText("下一步：采集 ChatGPT 输入框")
+3028:                 elif not send_template.exists():
+3029:                     self.next_step_label.setText("下一步：建议采集发送按钮，或保持 Enter 发送")
+3030:                 else:
+3031:                     self.next_step_label.setText("下一步：输入提示词，然后点击一键发送到编程工具")
+3032:                 self.next_step_label.setStyleSheet("background-color: #E3F2FD; padding: 10px; border-radius: 5px; font-weight: bold;")
+3033:         except Exception as e:
+3034:             self.log(f"更新下一步提示失败: {str(e)}")
+3035: 
+3036: if __name__ == "__main__":
+3037:     # 设置高 DPI 支持
+3038:     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+3039:     QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+3040:     
+3041:     app = QtWidgets.QApplication(sys.argv)
+3042:     gui = BridgeGUI()
+3043:     gui.show()
+3044:     sys.exit(app.exec_())
+
+===== def refresh_template_previews =====
+未找到
+
+===== def update_template_previews =====
+未找到
+
+===== def get_template_path =====
+0185:     def get_template_path(self, template_name):
+0186:         if not self.current_profile:
+0187:             return None
+0188:         return self.profiles.get(self.current_profile) / template_name
+0189: 
+
+===== def get_profile_dir =====
+0190:     def get_profile_dir(self):
+0191:         if not self.current_profile:
+0192:             return None
+0193:         return self.profiles.get(self.current_profile)
+0194: 
+
+===== def log =====
+1274:     def log(self, message):
+1275:         timestamp = time.strftime("%H:%M:%S")
+1276:         self.log_view.append(f"[{timestamp}] {message}")
+1277:         self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
+1278: 
+
+===== def set_error =====
+1264:     def set_error(self, error_msg):
+1265:         self.last_error = error_msg
+1266:         self.error_label.setText(f"最后错误: {error_msg}")
+1267:         self.error_label.setStyleSheet("color: red;")
+1268: 
+
+===== def capture_screen_pil =====
+0033: def capture_screen_pil(log_fn=None):
+0034:     """
+0035:     统一截图函数：优先 mss > PIL.ImageGrab > pyautogui.screenshot
+0036:     返回：PIL RGB Image；全部失败返回 None
+0037:     """
+0038:     global LAST_SCREENSHOT_BACKEND
+0039: 
+0040:     def _log(msg):
+0041:         try:
+0042:             if callable(log_fn):
+0043:                 log_fn(msg)
+0044:             else:
+0045:                 print(msg)
+0046:         except Exception:
+0047:             try:
+0048:                 print(msg)
+0049:             except Exception:
+0050:                 pass
+0051: 
+0052:     last_err = None
+0053: 
+0054:     # 1) mss
+0055:     try:
+0056:         if MSS_AVAILABLE and _mss and PIL_AVAILABLE and Image:
+0057:             with _mss() as sct:
+0058:                 monitor = sct.monitors[0]
+0059:                 img = sct.grab(monitor)  # BGRA
+0060:                 pil_img = Image.frombytes("RGB", img.size, img.bgra, "raw", "BGRX")
+0061:                 LAST_SCREENSHOT_BACKEND = "mss"
+0062:                 return pil_img.convert("RGB")
+0063:         else:
+0064:             if not MSS_AVAILABLE:
+0065:                 _log("截图后端: mss 不可用")
+0066:     except Exception as e:
+0067:         last_err = e
+0068:         _log(f"截图后端 mss 失败: {str(e)}")
+0069: 
+0070:     # 2) PIL.ImageGrab
+0071:     try:
+0072:         if PIL_AVAILABLE and ImageGrab:
+0073:             pil_img = ImageGrab.grab(all_screens=True)
+0074:             LAST_SCREENSHOT_BACKEND = "imagegrab"
+0075:             return pil_img.convert("RGB")
+0076:         else:
+0077:             _log("截图后端: PIL.ImageGrab 不可用")
+0078:     except Exception as e:
+0079:         last_err = e
+0080:         _log(f"截图后端 ImageGrab 失败: {str(e)}")
+0081: 
+0082:     # 3) pyautogui.screenshot
+0083:     try:
+0084:         pil_img = pyautogui.screenshot()
+0085:         LAST_SCREENSHOT_BACKEND = "pyautogui"
+0086:         try:
+0087:             return pil_img.convert("RGB")
+0088:         except Exception:
+0089:             return pil_img
+0090:     except Exception as e:
+0091:         last_err = e
+0092:         _log(f"截图后端 pyautogui 失败: {str(e)}")
+0093: 
+0094:     LAST_SCREENSHOT_BACKEND = None
+0095:     _log(f"截图失败: {str(last_err) if last_err else '未知错误'}")
+0096:     return None
+0097: 
+
+===== def take_screenshot =====
+1587:     def take_screenshot(self):
+1588:         try:
+1589:             pil_img = capture_screen_pil(log_fn=self.log)
+1590:             if pil_img is None:
+1591:                 raise RuntimeError("capture_screen_pil 返回 None")
+1592:             rgb = np.array(pil_img.convert("RGB"))
+1593:             return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+1594:         except Exception as e:
+1595:             self.set_error(f"截图失败: {str(e)}")
+1596:             raise
+1597: 
+
+===== 模板文件名出现位置 =====
+--- input_box_template.png ---
+1344:             ("input_box_template.png", self.input_status_label, self.input_preview_label),
+1411:             "input": ("input_box_template.png", "请选择编程工具的输入框"),
+1645:             "input": "input_box_template.png",
+1693:         template_path = self.get_template_path("input_box_template.png")
+1714:         result = self.find_template_with_score("input_box_template.png")
+1975:         result = self.find_template_with_score("input_box_template.png")
+2109:         template_path = self.get_template_path("input_box_template.png")
+2111:             self.log("错误: 请先采集编程工具输入框模板 (input_box_template.png)")
+2143:         template_path = self.get_template_path("input_box_template.png")
+2145:             self.log("错误: 请先采集编程工具输入框模板 (input_box_template.png)")
+2245:         input_template = profile_dir / "input_box_template.png"
+2297:             ("input_box_template.png", "编程工具输入框"),
+2545:             "input_box_template.png",
+2798:                 "template": "input_box_template.png"
+2915:                     if template_name == "input_box_template.png":
+2974:             self.capture_template("input_box_template.png", "请选择编程工具的输入框")
+3017:                 input_template = profile_dir / "input_box_template.png"
+
+--- send_button_template.png ---
+1345:             ("send_button_template.png", self.send_status_label, self.send_preview_label),
+1412:             "send": ("send_button_template.png", "请选择编程工具的发送按钮"),
+1646:             "send": "send_button_template.png",
+2012:             send_result = self.find_template_with_score("send_button_template.png")
+2546:             "send_button_template.png",
+2805:                 "template": "send_button_template.png"
+2917:                     elif template_name == "send_button_template.png":
+2980:             self.capture_template("send_button_template.png", "请选择编程工具的发送按钮")
+3018:                 send_template = profile_dir / "send_button_template.png"
+
+--- delete_popup.png ---
+1346:             ("delete_popup.png", self.delete_status_label, self.delete_preview_label),
+1413:             "delete": ("delete_popup.png", "请选择删除/确认按钮"),
+1647:             "delete": "delete_popup.png",
+1776:         result = self.find_template_with_score("delete_popup.png")
+2547:             "delete_popup.png",
+
+--- sandbox_button.png ---
+1347:             ("sandbox_button.png", self.sandbox_status_label, self.sandbox_preview_label),
+1414:             "sandbox": ("sandbox_button.png", "请选择后台沙箱按钮"),
+1648:             "sandbox": "sandbox_button.png",
+2027:                 sandbox_path = self.get_template_path("sandbox_button.png")
+2030:                     sandbox_result = self.find_template_with_score("sandbox_button.png")
+2548:             "sandbox_button.png",
+
+--- coder_copy_button.png ---
+1348:             ("coder_copy_button.png", self.coder_copy_status_label, self.coder_copy_preview_label),
+1415:             "coder_copy": ("coder_copy_button.png", "请选择编程工具的复制结果按钮"),
+1649:             "coder_copy": "coder_copy_button.png",
+1835:         template_path = self.get_template_path("coder_copy_button.png")
+1837:             self.log("复制失败: coder_copy_button.png 模板不存在")
+1841:         result = self.find_template_with_score("coder_copy_button.png")
+2272:         coder_copy_template = profile_dir / "coder_copy_button.png"
+2298:             ("coder_copy_button.png", "编程工具复制按钮"),
+2549:             "coder_copy_button.png",
+2812:                 "template": "coder_copy_button.png"
+2919:                     elif template_name == "coder_copy_button.png":
+2986:             self.capture_template("coder_copy_button.png", "请选择编程工具的复制结果按钮")
+3019:                 coder_copy_template = profile_dir / "coder_copy_button.png"
+
+--- gpt_input_box.png ---
+1349:             ("gpt_input_box.png", self.gpt_input_status_label, self.gpt_input_preview_label),
+1416:             "gpt_input": ("gpt_input_box.png", "请选择 ChatGPT 的输入框"),
+1650:             "gpt_input": "gpt_input_box.png",
+1888:         template_path = self.get_template_path("gpt_input_box.png")
+1890:             self.log("粘贴失败: gpt_input_box.png 模板不存在")
+1894:         result = self.find_template_with_score("gpt_input_box.png")
+2273:         gpt_input_template = profile_dir / "gpt_input_box.png"
+2299:             ("gpt_input_box.png", "ChatGPT 输入框")
+2550:             "gpt_input_box.png",
+2819:                 "template": "gpt_input_box.png"
+2921:                     elif template_name == "gpt_input_box.png":
+2992:             self.capture_template("gpt_input_box.png", "请选择 ChatGPT 的输入框")
+3020:                 gpt_input_template = profile_dir / "gpt_input_box.png"
+
+--- gpt_send_button.png ---
+1350:             ("gpt_send_button.png", self.gpt_send_status_label, self.gpt_send_preview_label),
+1417:             "gpt_send": ("gpt_send_button.png", "请选择 ChatGPT 的发送按钮")
+1651:             "gpt_send": "gpt_send_button.png"
+1930:             gpt_send_path = self.get_template_path("gpt_send_button.png")
+1932:                 gpt_send_result = self.find_template_with_score("gpt_send_button.png")
+2551:             "gpt_send_button.png"
+2826:                 "template": "gpt_send_button.png"
+2923:                     elif template_name == "gpt_send_button.png":
+2998:             self.capture_template("gpt_send_button.png", "请选择 ChatGPT 的发送按钮")

@@ -1,0 +1,746 @@
+=== def find_template_with_score ===
+    def find_template_with_score(self, template_name, threshold=0.75):
+        template_path = self.get_template_path(template_name)
+        if not template_path:
+            return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+        try:
+            if not template_path.exists():
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            try:
+                screenshot = self.take_screenshot()
+            except Exception as e:
+                self.log(f"截图失败: {str(e)}")
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            try:
+                template = read_cv_image_unicode(template_path)
+                if template is None:
+                    self.log(f"模板文件存在但读取失败，可能是中文路径或图片损坏: {template_path}")
+                    return {"found": False, "center_x": None, "center_y": None, "score": 0}
+                h, w = template.shape[:2]
+                self.log(f"模板读取成功: {template_name} 尺寸: {w}x{h}")
+            except Exception as e:
+                self.log(f"读取模板失败: {str(e)}")
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            if template is None:
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            res = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+            if max_val > threshold:
+                h, w = template.shape[:2]
+                center_x = max_loc[0] + w // 2
+                center_y = max_loc[1] + h // 2
+                return {"found": True, "center_x": center_x, "center_y": center_y, "score": max_val}
+
+            return {"found": False, "center_x": None, "center_y": None, "score": max_val}
+        except Exception as e:
+            self.log(f"模板匹配异常: {str(e)}")
+            self.set_error(f"模板匹配异常: {str(e)}")
+            return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+
+=== def execute_command ===
+    def execute_command(self, cmd):
+        global stop_current_task
+        stop_current_task = False
+
+        safe_mode = self.safe_mode_checkbox.isChecked()
+        mode_str = "安全模式" if safe_mode else "真实执行模式"
+        self.current_task_summary = cmd[:50]
+        self.update_task_status_display()
+
+        self.log_signal.emit(f"开始执行: {cmd[:80]}... [{mode_str}]")
+        self.status_signal.emit(f"状态: 执行中 - {cmd[:30]}...")
+
+        result = self.find_template_with_score("input_box_template.png")
+        if not result["found"]:
+            self.log_signal.emit("错误: 未找到输入框，无法执行")
+            self.set_error("未找到输入框")
+            return
+
+        input_pos = (result["center_x"], result["center_y"])
+        self.log_signal.emit(f"找到输入框，位置: {input_pos}，分数: {result['score']:.4f}")
+
+        if not self.click_position(input_pos):
+            self.set_error("点击输入框失败")
+            return
+
+        time.sleep(0.3)
+
+        clean_text = cmd.replace("<<PROMPT>>", "").replace("<<END>>", "").strip()
+        self.log_signal.emit("步骤1: 清理指令文本")
+
+        self.log_signal.emit("步骤2: 复制文本到剪贴板")
+        try:
+            if pyperclip:
+                pyperclip.copy(clean_text)
+                self.log_signal.emit("步骤3: 使用剪贴板粘贴 (pyperclip)")
+                pyautogui.hotkey('ctrl', 'v')
+            else:
+                self.log_signal.emit("步骤3: 使用 pyautogui 粘贴 (不支持中文)")
+                pyautogui.typewrite(clean_text)
+        except Exception as e:
+            self.log_signal.emit(f"粘贴失败: {str(e)}")
+            self.set_error(f"粘贴失败: {str(e)}")
+            return
+
+        time.sleep(0.2)
+
+        if safe_mode:
+            self.log_signal.emit("步骤4: 安全模式，跳过发送（不点击发送，不按Enter）")
+        else:
+            send_result = self.find_template_with_score("send_button_template.png")
+            if send_result["found"]:
+                self.log_signal.emit(f"步骤4: 点击发送按钮，位置: ({send_result['center_x']}, {send_result['center_y']})，分数: {send_result['score']:.4f}")
+                self.click_position((send_result['center_x'], send_result['center_y']))
+            else:
+                self.log_signal.emit("步骤4: 未找到发送按钮，使用 Enter 键")
+                pyautogui.press('enter')
+            self.log_signal.emit("指令已输入并发送")
+
+        start_time = time.time()
+        while running and not stop_current_task:
+            self.handle_popup()
+
+            elapsed = time.time() - start_time
+            if elapsed > 60:
+                sandbox_path = self.get_template_path("sandbox_button.png")
+                if sandbox_path and sandbox_path.exists():
+                    self.log_signal.emit("执行超时 (60秒)，尝试点击沙箱按钮（模板方式）...")
+                    sandbox_result = self.find_template_with_score("sandbox_button.png")
+                    if sandbox_result["found"]:
+                        self.click_position((sandbox_result['center_x'], sandbox_result['center_y']))
+                        self.log_signal.emit(f"已点击沙箱按钮（模板方式），重新开始计时，分数: {sandbox_result['score']:.4f}")
+                        start_time = time.time()
+                    else:
+                        self.log_signal.emit("模板方式未找到沙箱按钮，尝试关键词方式...")
+                        keywords_str = self.sandbox_keywords_input.text().strip()
+                        if keywords_str:
+                            keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                            button_obj = self.find_button_by_keywords(keywords)
+                            if button_obj:
+                                try:
+                                    button_obj.click()
+                                    self.log_signal.emit("已点击沙箱按钮（关键词方式），重新开始计时")
+                                    start_time = time.time()
+                                except Exception as e:
+                                    self.log_signal.emit(f"关键词方式点击沙箱按钮失败: {str(e)}，继续等待")
+                                    time.sleep(1)
+                                    start_time = time.time()
+                            else:
+                                self.log_signal.emit("未找到匹配关键词的沙箱按钮，继续等待")
+                                time.sleep(1)
+                                start_time = time.time()
+                        else:
+                            self.log_signal.emit("沙箱关键词为空，跳过关键词方式")
+                            time.sleep(1)
+                            start_time = time.time()
+                else:
+                    self.log_signal.emit("超时 60秒，沙箱按钮未采集，跳过")
+                    break
+
+            time.sleep(0.5)
+
+        self.log_signal.emit(f"完成执行: {cmd[:80]}...")
+        self.status_signal.emit("状态: 等待中")
+        self.current_task_summary = "无"
+        self.update_task_status_display()
+
+
+=== def one_click_send_to_coder ===
+    def one_click_send_to_coder(self):
+        cmd = self.command_input.toPlainText().strip()
+        if not cmd:
+            self.log("错误: 输入指令为空，请先输入提示词")
+            self.set_error("输入指令为空")
+            return
+
+        profile_dir = profile_manager.get_profile_dir()
+        input_template = profile_dir / "input_box_template.png"
+        if not input_template.exists():
+            self.log("错误: 请先采集编程工具输入框模板")
+            self.set_error("输入框模板未采集")
+            return
+
+        if not self.confirm_real_execution("真实发送内容到编程工具"):
+            return
+
+        wrapped_cmd = self.auto_wrap(cmd)
+        self.get_current_queue().put(wrapped_cmd)
+
+        display_text = wrapped_cmd[:80] + "..." if len(wrapped_cmd) > 80 else wrapped_cmd
+        self.queue_view.addItem(f"[待执行] {display_text}")
+        self.log(f"已加入队列: {display_text}")
+
+        if self.safe_mode_checkbox.isChecked():
+            self.log("安全模式: 只粘贴，不发送")
+            self.log("请手动检查粘贴内容")
+        else:
+            self.log("真实执行模式: 准备发送")
+            self.start_execution()
+
+        self.update_task_status_display()
+
+
+=== def copy_coder_result ===
+    def copy_coder_result(self):
+        self.log("开始复制编程工具结果...")
+        self.clear_error()
+
+        template_path = self.get_template_path("coder_copy_button.png")
+        if not template_path or not template_path.exists():
+            self.log("复制失败: coder_copy_button.png 模板不存在")
+            self.set_error("编程复制按钮模板不存在")
+            return False
+
+        result = self.find_template_with_score("coder_copy_button.png")
+        if not result["found"]:
+            self.log(f"复制失败: 未找到编程复制按钮 (最高分数: {result['score']:.4f})")
+            self.set_error("未找到编程复制按钮")
+            return False
+
+        copy_pos = (result["center_x"], result["center_y"])
+        self.log(f"找到编程复制按钮，位置: {copy_pos}，分数: {result['score']:.4f}")
+
+        try:
+            pyautogui.click(copy_pos[0], copy_pos[1])
+            self.log("已点击编程复制按钮")
+        except Exception as e:
+            self.log(f"点击编程复制按钮失败: {str(e)}")
+            self.set_error(f"点击失败: {str(e)}")
+            return False
+
+        time.sleep(0.5)
+
+        try:
+            if pyperclip:
+                clipboard_text = pyperclip.paste()
+                if clipboard_text:
+                    preview = clipboard_text[:120] + "..." if len(clipboard_text) > 120 else clipboard_text
+                    preview = preview.replace("\n", " ")
+                    self.log(f"复制成功！剪贴板内容前120字: {preview}")
+                    self.last_template_result = f"复制成功 ({len(clipboard_text)}字符)"
+                else:
+                    self.log("复制成功，但剪贴板为空")
+                    self.last_template_result = "复制成功 (剪贴板空)"
+            else:
+                self.log("复制成功（无法读取剪贴板，pyperclip未安装）")
+                self.last_template_result = "复制成功"
+        except Exception as e:
+            self.log(f"读取剪贴板失败: {str(e)}")
+            self.set_error(f"读取剪贴板失败: {str(e)}")
+            return False
+
+        self.update_task_status_display()
+        return True
+
+
+=== def paste_to_gpt ===
+    def paste_to_gpt(self):
+        safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+        mode_str = "安全模式" if safe_mode else "真实执行模式"
+        self.log(f"开始粘贴到ChatGPT... [{mode_str}]")
+        self.clear_error()
+
+        template_path = self.get_template_path("gpt_input_box.png")
+        if not template_path or not template_path.exists():
+            self.log("粘贴失败: gpt_input_box.png 模板不存在")
+            self.set_error("ChatGPT输入框模板不存在")
+            return False
+
+        result = self.find_template_with_score("gpt_input_box.png")
+        if not result["found"]:
+            self.log(f"粘贴失败: 未找到ChatGPT输入框 (最高分数: {result['score']:.4f})")
+            self.set_error("未找到ChatGPT输入框")
+            return False
+
+        gpt_input_pos = (result["center_x"], result["center_y"])
+        self.log(f"找到ChatGPT输入框，位置: {gpt_input_pos}，分数: {result['score']:.4f}")
+
+        try:
+            pyautogui.click(gpt_input_pos[0], gpt_input_pos[1])
+            self.log("已点击ChatGPT输入框")
+        except Exception as e:
+            self.log(f"点击ChatGPT输入框失败: {str(e)}")
+            self.set_error(f"点击失败: {str(e)}")
+            return False
+
+        time.sleep(0.3)
+
+        try:
+            if pyperclip:
+                pyautogui.hotkey('ctrl', 'v')
+                self.log("已使用 Ctrl+V 粘贴")
+            else:
+                pyautogui.typewrite("")
+                self.log("已使用 pyautogui.typewrite 粘贴（不支持中文）")
+        except Exception as e:
+            self.log(f"粘贴失败: {str(e)}")
+            self.set_error(f"粘贴失败: {str(e)}")
+            return False
+
+        time.sleep(0.2)
+
+        if safe_mode:
+            self.log("回传安全模式: 跳过发送（不点击发送，不按Enter）")
+        else:
+            gpt_send_path = self.get_template_path("gpt_send_button.png")
+            if gpt_send_path and gpt_send_path.exists():
+                gpt_send_result = self.find_template_with_score("gpt_send_button.png")
+                if gpt_send_result["found"]:
+                    gpt_send_pos = (gpt_send_result['center_x'], gpt_send_result['center_y'])
+                    self.log(f"点击ChatGPT发送按钮，位置: {gpt_send_pos}，分数: {gpt_send_result['score']:.4f}")
+                    self.click_position(gpt_send_pos)
+                else:
+                    self.log("未找到ChatGPT发送按钮，使用 Enter 键")
+                    pyautogui.press('enter')
+            else:
+                self.log("ChatGPT发送按钮模板不存在，使用 Enter 键")
+                pyautogui.press('enter')
+            self.log("已完成粘贴并发送")
+
+        return True
+
+
+=== def one_click_return_to_gpt ===
+    def one_click_return_to_gpt(self):
+        profile_dir = profile_manager.get_profile_dir()
+        coder_copy_template = profile_dir / "coder_copy_button.png"
+        gpt_input_template = profile_dir / "gpt_input_box.png"
+
+        missing_templates = []
+        if not coder_copy_template.exists():
+            missing_templates.append("编程工具复制按钮")
+        if not gpt_input_template.exists():
+            missing_templates.append("ChatGPT 输入框")
+
+        if missing_templates:
+            self.log(f"错误: 缺少模板: {', '.join(missing_templates)}")
+            self.set_error(f"缺少模板: {', '.join(missing_templates)}")
+            return
+
+        if not self.confirm_real_execution("回传结果到 ChatGPT"):
+            return
+
+        self.copy_and_paste_to_gpt()
+
+
+=== def capture_template ===
+    def capture_template(self, template_type):
+        template_map = {
+            "input": ("input_box_template.png", "编程工具输入框"),
+            "send": ("send_button_template.png", "编程工具发送按钮"),
+            "delete": ("delete_popup.png", "删除/确认按钮"),
+            "sandbox": ("sandbox_button.png", "后台沙箱按钮"),
+            "coder_copy": ("coder_copy_button.png", "编程工具复制结果按钮"),
+            "gpt_input": ("gpt_input_box.png", "ChatGPT 输入框"),
+            "gpt_send": ("gpt_send_button.png", "ChatGPT 发送按钮"),
+        }
+        if template_type not in template_map:
+            self.log(f"未知模板类型: {template_type}")
+            self.set_error(f"未知模板类型: {template_type}")
+            return
+
+        template_name, label = template_map[template_type]
+        try:
+            reply = QtWidgets.QMessageBox.question(
+                self, "采集模板",
+                f"准备采集：{label}\n\n确认后 L 会隐藏并截图，然后在截图窗口里框选区域。",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                self.log(f"采集已取消: {label}")
+                return
+
+            self.log(f"准备采集 {template_name}，当前配置: {profile_manager.current_profile}")
+            self.hide()
+            QtWidgets.QApplication.processEvents()
+            time.sleep(0.8)
+
+            screenshot = capture_screen_pil(self.log if hasattr(self, "log") else None)
+
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            QtWidgets.QApplication.processEvents()
+
+            if screenshot is None:
+                self.log("采集失败: 截图返回 None")
+                self.set_error("采集失败: 截图失败")
+                self.refresh_template_status()
+                self.update_next_step_hint()
+                return
+
+            self.log(f"截图成功，原图尺寸: {screenshot.size[0]}x{screenshot.size[1]}")
+            selector = WindowedRegionSelector(screenshot, self)
+            result = selector.exec_()
+
+            if result != QtWidgets.QMessageBox.Accepted:
+                self.log(f"采集已取消: {template_name}")
+                self.refresh_template_status()
+                self.update_next_step_hint()
+                return
+
+            cropped = selector.get_cropped_image()
+            if cropped is None:
+                self.log("采集失败: 没有有效选区")
+                self.set_error("采集失败: 没有有效选区")
+                self.refresh_template_status()
+                self.update_next_step_hint()
+                return
+
+            template_path = profile_manager.get_template_path(template_name)
+            if template_path is None:
+                self.log("采集失败: 无法获取当前配置模板路径")
+                self.set_error("采集失败: 无法获取当前配置模板路径")
+                return
+
+            template_path.parent.mkdir(parents=True, exist_ok=True)
+            cropped.save(str(template_path))
+
+            exists = template_path.exists()
+            size = template_path.stat().st_size if exists else 0
+            self.log(f"保存成功: {template_path}")
+            self.log(f"文件存在: {exists}，文件大小: {size} bytes")
+
+            test_img = read_cv_image_unicode(template_path)
+            if test_img is None:
+                self.log(f"保存后验证读取失败")
+                self.set_error(f"模板保存了，但读取失败")
+            else:
+                h, w = test_img.shape[:2]
+                self.log(f"保存后验证读取成功: {w}x{h}")
+                self.set_error("")
+
+            self.refresh_template_status()
+            self.update_next_step_hint()
+
+        except Exception as e:
+            try:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+            except Exception:
+                pass
+            self.log(f"采集异常: {e}")
+            self.set_error(f"采集异常: {e}")
+            try:
+                self.refresh_template_status()
+                self.update_next_step_hint()
+            except Exception:
+                pass
+
+
+=== def read_cv_image_unicode ===
+def read_cv_image_unicode(path):
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+        if data is None or len(data) == 0:
+            return None
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        return img
+    except Exception as e:
+        print(f"read_cv_image_unicode 失败: {str(e)}")
+        return None
+
+
+=== def capture_screen_pil ===
+def capture_screen_pil(log_fn=None):
+    """
+    统一截图函数：优先 mss > PIL.ImageGrab > pyautogui.screenshot
+    返回：PIL RGB Image；全部失败返回 None
+    """
+    global LAST_SCREENSHOT_BACKEND
+
+    def _log(msg):
+        try:
+            if callable(log_fn):
+                log_fn(msg)
+            else:
+                print(msg)
+        except Exception:
+            try:
+                print(msg)
+            except Exception:
+                pass
+
+    last_err = None
+
+    # 1) mss
+    try:
+        if MSS_AVAILABLE and _mss and PIL_AVAILABLE and Image:
+            with _mss() as sct:
+                monitor = sct.monitors[0]
+                img = sct.grab(monitor)  # BGRA
+                pil_img = Image.frombytes("RGB", img.size, img.bgra, "raw", "BGRX")
+                LAST_SCREENSHOT_BACKEND = "mss"
+                return pil_img.convert("RGB")
+        else:
+            if not MSS_AVAILABLE:
+                _log("截图后端: mss 不可用")
+    except Exception as e:
+        last_err = e
+        _log(f"截图后端 mss 失败: {str(e)}")
+
+    # 2) PIL.ImageGrab
+    try:
+        if PIL_AVAILABLE and ImageGrab:
+            pil_img = ImageGrab.grab(all_screens=True)
+            LAST_SCREENSHOT_BACKEND = "imagegrab"
+            return pil_img.convert("RGB")
+        else:
+            _log("截图后端: PIL.ImageGrab 不可用")
+    except Exception as e:
+        last_err = e
+        _log(f"截图后端 ImageGrab 失败: {str(e)}")
+
+    # 3) pyautogui.screenshot
+    try:
+        pil_img = pyautogui.screenshot()
+        LAST_SCREENSHOT_BACKEND = "pyautogui"
+        try:
+            return pil_img.convert("RGB")
+        except Exception:
+            return pil_img
+    except Exception as e:
+        last_err = e
+        _log(f"截图后端 pyautogui 失败: {str(e)}")
+
+    LAST_SCREENSHOT_BACKEND = None
+    _log(f"截图失败: {str(last_err) if last_err else '未知错误'}")
+    return None
+
+
+=== def refresh_template_status ===
+    def refresh_template_status(self):
+        self.clear_error()
+        profile_dir = profile_manager.get_profile_dir()
+
+        templates_status = [
+            ("input_box_template.png", self.input_status_label, self.input_preview_label),
+            ("send_button_template.png", self.send_status_label, self.send_preview_label),
+            ("delete_popup.png", self.delete_status_label, self.delete_preview_label),
+            ("sandbox_button.png", self.sandbox_status_label, self.sandbox_preview_label),
+            ("coder_copy_button.png", self.coder_copy_status_label, self.coder_copy_preview_label),
+            ("gpt_input_box.png", self.gpt_input_status_label, self.gpt_input_preview_label),
+            ("gpt_send_button.png", self.gpt_send_status_label, self.gpt_send_preview_label),
+        ]
+
+        for template_name, status_label, preview_label in templates_status:
+            if profile_dir:
+                template_path = profile_dir / template_name
+            else:
+                template_path = None
+
+            if template_path and template_path.exists():
+                status_label.setText(f"{template_name.split('_')[0]}: 已采集")
+                status_label.setStyleSheet("color: green;")
+                self.update_preview_image(preview_label, template_path)
+            else:
+                short_name = template_name.split('_')[0]
+                status_label.setText(f"{short_name}: 未采集")
+                status_label.setStyleSheet("color: orange;")
+                preview_label.setText("未采集")
+                preview_label.setAlignment(QtCore.Qt.AlignCenter)
+
+        self.update_profile_display()
+        self.wizard_update_display()
+        self.update_next_step_hint()
+
+
+=== def update_preview_image ===
+    def update_preview_image(self, label, template_path):
+        try:
+            img = read_cv_image_unicode(template_path)
+            if img is not None:
+                h, w = img.shape[:2]
+                aspect = w / h if h > 0 else 1
+                label_w = 60
+                label_h = int(label_w / aspect)
+                if label_h > 25:
+                    label_h = 25
+                    label_w = int(label_h * aspect)
+                if label_w < 10:
+                    label_w = 10
+                if label_h < 10:
+                    label_h = 10
+                img_resized = cv2.resize(img, (label_w, label_h))
+                img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+                h, w = img_rgb.shape[:2]
+                bytes_per_line = 3 * w
+                q_image = QtGui.QImage(img_rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                pixmap = QtGui.QPixmap.fromImage(q_image)
+                label.setPixmap(pixmap)
+                label.setAlignment(QtCore.Qt.AlignCenter)
+            else:
+                label.setText("读取失败")
+        except Exception as e:
+            label.setText("预览失败")
+
+
+=== class WindowedRegionSelector ===
+class WindowedRegionSelector(QtWidgets.QDialog):
+    def __init__(self, pil_image, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("请选择模板区域")
+        self.original_image = pil_image.convert("RGB")
+        self.orig_w, self.orig_h = self.original_image.size
+        self.start_pos = None
+        self.end_pos = None
+        self.crop_box = None
+
+        raw = self.original_image.tobytes("raw", "RGB")
+        self._raw = raw
+        qimg = QtGui.QImage(raw, self.orig_w, self.orig_h, self.orig_w * 3, QtGui.QImage.Format_RGB888)
+        self.base_pixmap = QtGui.QPixmap.fromImage(qimg)
+
+        screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
+        max_w = int(screen.width() * 0.88)
+        max_h = int(screen.height() * 0.72)
+        self.scale = min(max_w / self.orig_w, max_h / self.orig_h, 1.0)
+        self.disp_w = max(1, int(self.orig_w * self.scale))
+        self.disp_h = max(1, int(self.orig_h * self.scale))
+        self.display_pixmap = self.base_pixmap.scaled(
+            self.disp_w, self.disp_h,
+            QtCore.Qt.KeepAspectRatio,
+            QtCore.Qt.SmoothTransformation
+        )
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(QtWidgets.QLabel("拖拽选择区域，然后点击“保存选区”。ESC 或取消可退出。"))
+
+        self.info = QtWidgets.QLabel("当前选区：无")
+        layout.addWidget(self.info)
+
+        self.image_label = QtWidgets.QLabel()
+        self.image_label.setPixmap(self.display_pixmap)
+        self.image_label.setFixedSize(self.disp_w, self.disp_h)
+        self.image_label.installEventFilter(self)
+        self.image_label.setCursor(QtCore.Qt.CrossCursor)
+        layout.addWidget(self.image_label)
+
+        row = QtWidgets.QHBoxLayout()
+        self.save_btn = QtWidgets.QPushButton("保存选区")
+        self.cancel_btn = QtWidgets.QPushButton("取消")
+        self.save_btn.setMinimumHeight(36)
+        self.cancel_btn.setMinimumHeight(36)
+        row.addWidget(self.save_btn)
+        row.addWidget(self.cancel_btn)
+        layout.addLayout(row)
+
+        self.save_btn.clicked.connect(self.save_selection)
+        self.cancel_btn.clicked.connect(self.reject)
+
+        self.resize(min(self.disp_w + 40, max_w), min(self.disp_h + 130, max_h + 140))
+
+    def eventFilter(self, obj, event):
+        if obj is self.image_label:
+            if event.type() == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
+                self.start_pos = event.pos()
+                self.end_pos = event.pos()
+                self.update_overlay()
+                return True
+
+            if event.type() == QtCore.QEvent.MouseMove and self.start_pos is not None:
+                self.end_pos = event.pos()
+                self.update_overlay()
+                return True
+
+            if event.type() == QtCore.QEvent.MouseButtonRelease and self.start_pos is not None:
+                self.end_pos = event.pos()
+                self.update_overlay()
+                return True
+
+        return super().eventFilter(obj, event)
+
+    def _rect_display(self):
+        if self.start_pos is None or self.end_pos is None:
+            return None
+
+        x1, y1 = self.start_pos.x(), self.start_pos.y()
+        x2, y2 = self.end_pos.x(), self.end_pos.y()
+
+        x = max(0, min(x1, x2))
+        y = max(0, min(y1, y2))
+        w = abs(x2 - x1)
+        h = abs(y2 - y1)
+
+        x = min(x, self.disp_w - 1)
+        y = min(y, self.disp_h - 1)
+        w = min(w, self.disp_w - x)
+        h = min(h, self.disp_h - y)
+
+        return QtCore.QRect(x, y, w, h)
+
+    def _crop_from_display(self, rect):
+        x = int(rect.x() / self.scale)
+        y = int(rect.y() / self.scale)
+        w = int(rect.width() / self.scale)
+        h = int(rect.height() / self.scale)
+
+        x = max(0, min(x, self.orig_w - 1))
+        y = max(0, min(y, self.orig_h - 1))
+        w = max(0, min(w, self.orig_w - x))
+        h = max(0, min(h, self.orig_h - y))
+
+        return x, y, w, h
+
+    def update_overlay(self):
+        pix = QtGui.QPixmap(self.display_pixmap)
+        rect = self._rect_display()
+
+        if rect:
+            painter = QtGui.QPainter(pix)
+            painter.fillRect(rect, QtGui.QColor(255, 0, 0, 70))
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 0, 0), 2))
+            painter.drawRect(rect)
+            painter.end()
+
+            cx, cy, cw, ch = self._crop_from_display(rect)
+            self.info.setText(
+                f"当前选区：显示({rect.x()},{rect.y()},{rect.width()},{rect.height()})  "
+                f"裁剪({cx},{cy},{cw},{ch})"
+            )
+
+        self.image_label.setPixmap(pix)
+
+    def save_selection(self):
+        rect = self._rect_display()
+
+        if not rect or rect.width() < 10 or rect.height() < 10:
+            QtWidgets.QMessageBox.warning(self, "选区太小", "请先拖拽选择至少 10x10 的区域。")
+            return
+
+        crop_box = self._crop_from_display(rect)
+
+        if crop_box[2] < 10 or crop_box[3] < 10:
+            QtWidgets.QMessageBox.warning(self, "选区太小", "换算后的裁剪区域太小，请重新选择。")
+            return
+
+        self.crop_box = crop_box
+        self.accept()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.reject()
+            return
+
+        if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            self.save_selection()
+            return
+
+        super().keyPressEvent(event)
+
+    def get_cropped_image(self):
+        if not self.crop_box:
+            return None
+
+        x, y, w, h = self.crop_box
+        return self.original_image.crop((x, y, x + w, y + h))
+
+

@@ -1,0 +1,8 @@
+PyQt5
+pyautogui
+opencv-python
+numpy
+pyperclip
+pywinauto
+mss
+Pillow

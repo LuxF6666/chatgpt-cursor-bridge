@@ -1,0 +1,2980 @@
+﻿import sys
+import time
+import os
+import threading
+import json
+import re
+from pathlib import Path
+from queue import Queue
+from PyQt5 import QtWidgets, QtGui, QtCore
+import pyautogui
+import cv2
+import numpy as np
+
+def read_cv_image_unicode(path):
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+        if data is None or len(data) == 0:
+            return None
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        return img
+    except Exception as e:
+        print(f"read_cv_image_unicode 澶辫触: {str(e)}")
+        return None
+
+def load_qpixmap_unicode(path, max_size=None):
+    try:
+        from PIL import Image as PILImage
+        pil_img = PILImage.open(str(path)).convert("RGB")
+        if max_size is not None:
+            w, h = pil_img.size
+            if w > max_size or h > max_size:
+                ratio = min(max_size / w, max_size / h)
+                new_w, new_h = int(w * ratio), int(h * ratio)
+                pil_img = pil_img.resize((new_w, new_h), PILImage.LANCZOS)
+        img_data = pil_img.tobytes("raw", "RGB")
+        q_image = QtGui.QImage(img_data, pil_img.width, pil_img.height, 3 * pil_img.width, QtGui.QImage.Format_RGB888)
+        pixmap = QtGui.QPixmap.fromImage(q_image)
+        return pixmap
+    except Exception as e:
+        print(f"load_qpixmap_unicode 澶辫触: {str(e)}")
+        return None
+
+APP_VERSION = "0.1.0"
+
+try:
+    from PIL import Image, ImageGrab
+    PIL_AVAILABLE = True
+except Exception:
+    Image = None
+    ImageGrab = None
+    PIL_AVAILABLE = False
+
+try:
+    from mss import mss as _mss
+    MSS_AVAILABLE = True
+except Exception:
+    _mss = None
+    MSS_AVAILABLE = False
+
+LAST_SCREENSHOT_BACKEND = None  # "mss" | "imagegrab" | "pyautogui" | None
+
+def capture_screen_pil(log_fn=None):
+    """
+    缁熶竴鎴浘鍑芥暟锛氫紭鍏?mss > PIL.ImageGrab > pyautogui.screenshot
+    杩斿洖锛歅IL RGB Image锛涘叏閮ㄥけ璐ヨ繑鍥?None
+    """
+    global LAST_SCREENSHOT_BACKEND
+
+    def _log(msg):
+        try:
+            if callable(log_fn):
+                log_fn(msg)
+            else:
+                print(msg)
+        except Exception:
+            try:
+                print(msg)
+            except Exception:
+                pass
+
+    last_err = None
+
+    # 1) mss
+    try:
+        if MSS_AVAILABLE and _mss and PIL_AVAILABLE and Image:
+            with _mss() as sct:
+                monitor = sct.monitors[0]
+                img = sct.grab(monitor)  # BGRA
+                pil_img = Image.frombytes("RGB", img.size, img.bgra, "raw", "BGRX")
+                LAST_SCREENSHOT_BACKEND = "mss"
+                return pil_img.convert("RGB")
+        else:
+            if not MSS_AVAILABLE:
+                _log("鎴浘鍚庣: mss 涓嶅彲鐢?)
+    except Exception as e:
+        last_err = e
+        _log(f"鎴浘鍚庣 mss 澶辫触: {str(e)}")
+
+    # 2) PIL.ImageGrab
+    try:
+        if PIL_AVAILABLE and ImageGrab:
+            pil_img = ImageGrab.grab(all_screens=True)
+            LAST_SCREENSHOT_BACKEND = "imagegrab"
+            return pil_img.convert("RGB")
+        else:
+            _log("鎴浘鍚庣: PIL.ImageGrab 涓嶅彲鐢?)
+    except Exception as e:
+        last_err = e
+        _log(f"鎴浘鍚庣 ImageGrab 澶辫触: {str(e)}")
+
+    # 3) pyautogui.screenshot
+    try:
+        pil_img = pyautogui.screenshot()
+        LAST_SCREENSHOT_BACKEND = "pyautogui"
+        try:
+            return pil_img.convert("RGB")
+        except Exception:
+            return pil_img
+    except Exception as e:
+        last_err = e
+        _log(f"鎴浘鍚庣 pyautogui 澶辫触: {str(e)}")
+
+    LAST_SCREENSHOT_BACKEND = None
+    _log(f"鎴浘澶辫触: {str(last_err) if last_err else '鏈煡閿欒'}")
+    return None
+
+def pil_image_to_qpixmap(pil_img, log_fn=None):
+    """
+    PIL Image -> QPixmap
+    浼樺厛璧板唴瀛樿浆鎹紱澶辫触鍒欒惤鐩樺埌涓存椂鏂囦欢鍐嶅姞杞斤紝淇濊瘉绋冲畾銆?
+    """
+    def _log(msg):
+        try:
+            if callable(log_fn):
+                log_fn(msg)
+            else:
+                print(msg)
+        except Exception:
+            pass
+
+    if pil_img is None:
+        return QtGui.QPixmap()
+
+    try:
+        rgb = pil_img.convert("RGB")
+        w, h = rgb.size
+        data = rgb.tobytes("raw", "RGB")
+        qimg = QtGui.QImage(data, w, h, 3 * w, QtGui.QImage.Format_RGB888)
+        return QtGui.QPixmap.fromImage(qimg)
+    except Exception as e:
+        _log(f"PIL->QPixmap 鍐呭瓨杞崲澶辫触锛屽皾璇曚复鏃舵枃浠? {str(e)}")
+        try:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+            tmp_path = tmp.name
+            tmp.close()
+            pil_img.save(tmp_path, format="PNG")
+            pm = QtGui.QPixmap(tmp_path)
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+            return pm
+        except Exception as e2:
+            _log(f"PIL->QPixmap 涓存椂鏂囦欢杞崲澶辫触: {str(e2)}")
+            return QtGui.QPixmap()
+
+try:
+    import pyperclip
+except ImportError:
+    pyperclip = None
+
+try:
+    from pywinauto import Desktop
+    PYWINAUTO_AVAILABLE = True
+except Exception:
+    Desktop = None
+    PYWINAUTO_AVAILABLE = False
+
+running = False
+pending_execution = False
+stop_current_task = False
+stop_event = threading.Event()
+
+BASE_DIR = Path(__file__).parent
+PROFILES_DIR = BASE_DIR / "profiles"
+
+DEFAULT_PROFILES = ["宸︿晶椤圭洰", "鍙充晶椤圭洰"]
+
+class ProfileManager:
+    def __init__(self):
+        self.current_profile = None
+        self.profiles = {}
+        self.profile_queues = {}
+        self.ensure_default_profiles()
+        if self.profiles:
+            self.current_profile = list(self.profiles.keys())[0]
+        self.load_profile_config(self.current_profile)
+
+    def ensure_default_profiles(self):
+        try:
+            PROFILES_DIR.mkdir(exist_ok=True)
+            for profile_name in DEFAULT_PROFILES:
+                profile_path = PROFILES_DIR / profile_name
+                if not profile_path.exists():
+                    profile_path.mkdir(parents=True, exist_ok=True)
+                if profile_name not in self.profiles:
+                    self.profiles[profile_name] = profile_path
+                if profile_name not in self.profile_queues:
+                    self.profile_queues[profile_name] = Queue()
+        except Exception as e:
+            print(f"鍒涘缓榛樿閰嶇疆澶辫触: {e}")
+
+    def get_template_path(self, template_name):
+        if not self.current_profile:
+            return None
+        return self.profiles.get(self.current_profile) / template_name
+
+    def get_profile_dir(self):
+        if not self.current_profile:
+            return None
+        return self.profiles.get(self.current_profile)
+
+    def create_profile(self, name):
+        try:
+            if not name or not name.strip():
+                return False, "閰嶇疆鍚嶇О涓嶈兘涓虹┖"
+            illegal_chars = r'[<>:"/\\|?*]'
+            if re.search(illegal_chars, name):
+                return False, "閰嶇疆鍚嶇О鍖呭惈闈炴硶瀛楃"
+            name = name.strip()
+            if name in self.profiles:
+                return False, "閰嶇疆鍚嶇О宸插瓨鍦?
+            profile_path = PROFILES_DIR / name
+            profile_path.mkdir(parents=True, exist_ok=True)
+            self.profiles[name] = profile_path
+            self.profile_queues[name] = Queue()
+            self.save_profile_config(name)
+            return True, f"閰嶇疆 '{name}' 鍒涘缓鎴愬姛"
+        except Exception as e:
+            return False, f"鍒涘缓閰嶇疆澶辫触: {str(e)}"
+
+    def delete_profile(self, name):
+        try:
+            if len(self.profiles) <= 1:
+                return False, "鑷冲皯淇濈暀涓€涓厤缃?
+            if name not in self.profiles:
+                return False, "閰嶇疆涓嶅瓨鍦?
+            if name == self.current_profile:
+                return False, "涓嶈兘鍒犻櫎褰撳墠閰嶇疆"
+            profile_path = self.profiles[name]
+            try:
+                import shutil
+                shutil.rmtree(profile_path)
+            except:
+                pass
+            del self.profiles[name]
+            del self.profile_queues[name]
+            return True, f"閰嶇疆 '{name}' 宸插垹闄?
+        except Exception as e:
+            return False, f"鍒犻櫎閰嶇疆澶辫触: {str(e)}"
+
+    def switch_profile(self, name):
+        try:
+            if name not in self.profiles:
+                return False, "閰嶇疆涓嶅瓨鍦?
+            self.current_profile = name
+            self.load_profile_config(name)
+            return True, f"宸插垏鎹㈠埌閰嶇疆 '{name}'"
+        except Exception as e:
+            return False, f"鍒囨崲閰嶇疆澶辫触: {str(e)}"
+
+    def get_config_path(self, name=None):
+        if not name:
+            name = self.current_profile
+        if name and name in self.profiles:
+            return self.profiles[name] / "config.json"
+        return None
+
+    def load_profile_config(self, name):
+        try:
+            config_path = self.get_config_path(name)
+            if config_path and config_path.exists():
+                with open(config_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            return {"safe_mode": True, "gpt_safe_mode": True}
+        except Exception as e:
+            return {"safe_mode": True, "gpt_safe_mode": True}
+
+    def save_profile_config(self, name=None, delete_keywords=None, sandbox_keywords=None):
+        try:
+            if not name:
+                name = self.current_profile
+            config_path = self.get_config_path(name)
+            if not config_path:
+                return
+            config = {
+                "safe_mode": getattr(self, 'safe_mode', True),
+                "gpt_safe_mode": getattr(self, 'gpt_safe_mode', True)
+            }
+            if delete_keywords is not None:
+                config["delete_keywords"] = delete_keywords
+            if sandbox_keywords is not None:
+                config["sandbox_keywords"] = sandbox_keywords
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"淇濆瓨閰嶇疆澶辫触: {e}")
+
+    def get_queue(self, name=None):
+        if not name:
+            name = self.current_profile
+        if name not in self.profile_queues:
+            self.profile_queues[name] = Queue()
+        return self.profile_queues[name]
+
+profile_manager = ProfileManager()
+
+class QueueUpdateSignal(QtCore.QObject):
+    update_signal = QtCore.pyqtSignal(str, str)
+
+
+class WindowedRegionSelector(QtWidgets.QDialog):
+    def __init__(self, pil_image, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("璇烽€夋嫨妯℃澘鍖哄煙")
+        self.original_image = pil_image.convert("RGB")
+        self.orig_w, self.orig_h = self.original_image.size
+        self.start_pos = None
+        self.end_pos = None
+        self.crop_box = None
+
+        raw = self.original_image.tobytes("raw", "RGB")
+        self._raw = raw
+        qimg = QtGui.QImage(raw, self.orig_w, self.orig_h, self.orig_w * 3, QtGui.QImage.Format_RGB888)
+        self.base_pixmap = QtGui.QPixmap.fromImage(qimg)
+
+        screen = QtWidgets.QApplication.primaryScreen().availableGeometry()
+        max_w = int(screen.width() * 0.88)
+        max_h = int(screen.height() * 0.72)
+        self.scale = min(max_w / self.orig_w, max_h / self.orig_h, 1.0)
+        self.disp_w = max(1, int(self.orig_w * self.scale))
+        self.disp_h = max(1, int(self.orig_h * self.scale))
+        self.display_pixmap = self.base_pixmap.scaled(
+            self.disp_w, self.disp_h,
+            QtCore.Qt.KeepAspectRatio,
+            QtCore.Qt.SmoothTransformation
+        )
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(QtWidgets.QLabel("鎷栨嫿閫夋嫨鍖哄煙锛岀劧鍚庣偣鍑烩€滀繚瀛橀€夊尯鈥濄€侲SC 鎴栧彇娑堝彲閫€鍑恒€?))
+
+        self.info = QtWidgets.QLabel("褰撳墠閫夊尯锛氭棤")
+        layout.addWidget(self.info)
+
+        self.image_label = QtWidgets.QLabel()
+        self.image_label.setPixmap(self.display_pixmap)
+        self.image_label.setFixedSize(self.disp_w, self.disp_h)
+        self.image_label.installEventFilter(self)
+        self.image_label.setCursor(QtCore.Qt.CrossCursor)
+        layout.addWidget(self.image_label)
+
+        row = QtWidgets.QHBoxLayout()
+        self.save_btn = QtWidgets.QPushButton("淇濆瓨閫夊尯")
+        self.cancel_btn = QtWidgets.QPushButton("鍙栨秷")
+        self.save_btn.setMinimumHeight(36)
+        self.cancel_btn.setMinimumHeight(36)
+        row.addWidget(self.save_btn)
+        row.addWidget(self.cancel_btn)
+        layout.addLayout(row)
+
+        self.save_btn.clicked.connect(self.save_selection)
+        self.cancel_btn.clicked.connect(self.reject)
+
+        self.resize(min(self.disp_w + 40, max_w), min(self.disp_h + 130, max_h + 140))
+
+    def eventFilter(self, obj, event):
+        if obj is self.image_label:
+            if event.type() == QtCore.QEvent.MouseButtonPress and event.button() == QtCore.Qt.LeftButton:
+                self.start_pos = event.pos()
+                self.end_pos = event.pos()
+                self.update_overlay()
+                return True
+
+            if event.type() == QtCore.QEvent.MouseMove and self.start_pos is not None:
+                self.end_pos = event.pos()
+                self.update_overlay()
+                return True
+
+            if event.type() == QtCore.QEvent.MouseButtonRelease and self.start_pos is not None:
+                self.end_pos = event.pos()
+                self.update_overlay()
+                return True
+
+        return super().eventFilter(obj, event)
+
+    def _rect_display(self):
+        if self.start_pos is None or self.end_pos is None:
+            return None
+
+        x1, y1 = self.start_pos.x(), self.start_pos.y()
+        x2, y2 = self.end_pos.x(), self.end_pos.y()
+
+        x = max(0, min(x1, x2))
+        y = max(0, min(y1, y2))
+        w = abs(x2 - x1)
+        h = abs(y2 - y1)
+
+        x = min(x, self.disp_w - 1)
+        y = min(y, self.disp_h - 1)
+        w = min(w, self.disp_w - x)
+        h = min(h, self.disp_h - y)
+
+        return QtCore.QRect(x, y, w, h)
+
+    def _crop_from_display(self, rect):
+        x = int(rect.x() / self.scale)
+        y = int(rect.y() / self.scale)
+        w = int(rect.width() / self.scale)
+        h = int(rect.height() / self.scale)
+
+        x = max(0, min(x, self.orig_w - 1))
+        y = max(0, min(y, self.orig_h - 1))
+        w = max(0, min(w, self.orig_w - x))
+        h = max(0, min(h, self.orig_h - y))
+
+        return x, y, w, h
+
+    def update_overlay(self):
+        pix = QtGui.QPixmap(self.display_pixmap)
+        rect = self._rect_display()
+
+        if rect:
+            painter = QtGui.QPainter(pix)
+            painter.fillRect(rect, QtGui.QColor(255, 0, 0, 70))
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 0, 0), 2))
+            painter.drawRect(rect)
+            painter.end()
+
+            cx, cy, cw, ch = self._crop_from_display(rect)
+            self.info.setText(
+                f"褰撳墠閫夊尯锛氭樉绀?{rect.x()},{rect.y()},{rect.width()},{rect.height()})  "
+                f"瑁佸壀({cx},{cy},{cw},{ch})"
+            )
+
+        self.image_label.setPixmap(pix)
+
+    def save_selection(self):
+        rect = self._rect_display()
+
+        if not rect or rect.width() < 10 or rect.height() < 10:
+            QtWidgets.QMessageBox.warning(self, "閫夊尯澶皬", "璇峰厛鎷栨嫿閫夋嫨鑷冲皯 10x10 鐨勫尯鍩熴€?)
+            return
+
+        crop_box = self._crop_from_display(rect)
+
+        if crop_box[2] < 10 or crop_box[3] < 10:
+            QtWidgets.QMessageBox.warning(self, "閫夊尯澶皬", "鎹㈢畻鍚庣殑瑁佸壀鍖哄煙澶皬锛岃閲嶆柊閫夋嫨銆?)
+            return
+
+        self.crop_box = crop_box
+        self.accept()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.reject()
+            return
+
+        if event.key() in (QtCore.Qt.Key_Return, QtCore.Qt.Key_Enter):
+            self.save_selection()
+            return
+
+        super().keyPressEvent(event)
+
+    def get_cropped_image(self):
+        if not self.crop_box:
+            return None
+
+        x, y, w, h = self.crop_box
+        return self.original_image.crop((x, y, x + w, y + h))
+
+class RegionSelector(QtWidgets.QWidget):
+    def __init__(self, screenshot, screenshot_pil=None, log_fn=None):
+        super().__init__()
+        self.screenshot = screenshot
+        self.screenshot_pil = screenshot_pil
+        self.start_point = None
+        self.end_point = None
+        self.is_selecting = False
+        self.log_fn = log_fn
+
+        screen = QtWidgets.QApplication.primaryScreen()
+        self.setGeometry(screen.geometry())
+        self.setWindowFlags(QtCore.Qt.FramelessWindowHint | QtCore.Qt.WindowStaysOnTopHint)
+        self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
+
+        self.pixmap = self.convert_screenshot_to_pixmap()
+        self.selection_rect = QtCore.QRect()
+        self.cancelled = False
+
+    def convert_screenshot_to_pixmap(self):
+        if self.screenshot_pil is not None:
+            pm = pil_image_to_qpixmap(self.screenshot_pil, log_fn=self.log_fn)
+            if not pm.isNull():
+                return pm
+        screenshot_rgb = cv2.cvtColor(self.screenshot, cv2.COLOR_BGR2RGB)
+        height, width, channel = screenshot_rgb.shape
+        bytes_per_line = 3 * width
+        q_image = QtGui.QImage(screenshot_rgb.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888)
+        return QtGui.QPixmap.fromImage(q_image)
+
+    def paintEvent(self, event):
+        painter = QtGui.QPainter(self)
+        painter.drawPixmap(self.rect(), self.pixmap)
+
+        if self.is_selecting and self.start_point and self.end_point:
+            painter.setPen(QtGui.QPen(QtGui.QColor(0, 255, 0), 2))
+            rect = QtCore.QRect(self.start_point, self.end_point).normalized()
+            painter.drawRect(rect)
+
+            brush = QtGui.QBrush(QtGui.QColor(0, 255, 0, 50))
+            painter.setBrush(brush)
+            painter.drawRect(rect)
+
+            painter.setPen(QtGui.QPen(QtGui.QColor(255, 255, 255), 1))
+            text = f"閫夋嫨鍖哄煙: {rect.width()} x {rect.height()}"
+            painter.drawText(rect.topLeft() + QtCore.QPoint(10, 20), text)
+
+    def mousePressEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self.start_point = event.pos()
+            self.end_point = event.pos()
+            self.is_selecting = True
+            self.update()
+
+    def mouseMoveEvent(self, event):
+        if self.is_selecting:
+            self.end_point = event.pos()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == QtCore.Qt.LeftButton:
+            self.is_selecting = False
+            self.end_point = event.pos()
+            self.selection_rect = QtCore.QRect(self.start_point, self.end_point).normalized()
+            if self.selection_rect.width() < 10 or self.selection_rect.height() < 10:
+                self.cancelled = True
+            self.close()
+
+    def keyPressEvent(self, event):
+        if event.key() == QtCore.Qt.Key_Escape:
+            self.cancelled = True
+            self.close()
+
+
+class BridgeGUI(QtWidgets.QWidget):
+    log_signal = QtCore.pyqtSignal(str)
+    status_signal = QtCore.pyqtSignal(str)
+    queue_update_signal = QtCore.pyqtSignal(str, str)
+    status_update_signal = QtCore.pyqtSignal(str, str, str, str)
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle(f"L 妗ユ宸ュ叿 v{APP_VERSION}")
+        
+        # 鑾峰彇灞忓箷鍙敤鍖哄煙
+        screen = QtWidgets.QApplication.primaryScreen()
+        available_geometry = screen.availableGeometry()
+        screen_width = available_geometry.width()
+        screen_height = available_geometry.height()
+        
+        # 璁＄畻绐楀彛澶у皬锛氭渶澶т负灞忓箷鐨?0%
+        window_width = min(1200, int(screen_width * 0.9))
+        window_height = min(850, int(screen_height * 0.9))
+        
+        # 璁剧疆绐楀彛浣嶇疆鍜屽ぇ灏?
+        self.setGeometry(
+            (screen_width - window_width) // 2,
+            (screen_height - window_height) // 2,
+            window_width,
+            window_height
+        )
+        
+        # 璁剧疆鏈€灏忓昂瀵?
+        self.setMinimumSize(900, 620)
+
+        self.log_signal.connect(self.on_log_signal)
+        self.status_signal.connect(self.on_status_signal)
+        self.queue_update_signal.connect(self.on_queue_update_signal)
+        self.status_update_signal.connect(self.on_status_update_signal)
+
+        self.current_mode = "瀹夊叏妯″紡"
+        self.current_task_summary = "鏃?
+        self.last_template_result = "鏃?
+        self.last_error = "鏃?
+
+        self.safe_mode = True
+        self.gpt_safe_mode = True
+
+        self.鍚戝_step = 1
+        self.鍚戝_skipped = False
+        self.鍚戝_safety_drill_done = False
+
+        # 鍒涘缓涓诲竷灞€
+        main_layout = QtWidgets.QVBoxLayout()
+
+        # 鍒涘缓椤堕儴鎸夐挳甯冨眬锛堜繚鎸佸湪婊氬姩鍖哄煙澶栵級
+        self.top_buttons_layout = QtWidgets.QHBoxLayout()
+        self.open_readme_btn = QtWidgets.QPushButton("鎵撳紑浣跨敤璇存槑")
+        self.open_program_dir_btn = QtWidgets.QPushButton("鎵撳紑绋嬪簭鐩綍")
+        self.open_profile_dir_btn = QtWidgets.QPushButton("鎵撳紑褰撳墠閰嶇疆鐩綍")
+        self.system_check_btn = QtWidgets.QPushButton("绯荤粺鑷")
+        self.save_report_btn = QtWidgets.QPushButton("淇濆瓨璇婃柇鎶ュ憡")
+        self.backup_btn = QtWidgets.QPushButton("鍒涘缓鐗堟湰澶囦唤")
+        self.zoom_label = QtWidgets.QLabel("鐣岄潰缂╂斁:")
+        self.zoom_small_btn = QtWidgets.QPushButton("灏?)
+        self.zoom_medium_btn = QtWidgets.QPushButton("涓?)
+        self.zoom_large_btn = QtWidgets.QPushButton("澶?)
+        self.zoom_small_btn.setMinimumSize(40, 34)
+        self.zoom_medium_btn.setMinimumSize(40, 34)
+        self.zoom_large_btn.setMinimumSize(40, 34)
+        self.top_buttons_layout.addWidget(self.open_readme_btn)
+        self.top_buttons_layout.addWidget(self.open_program_dir_btn)
+        self.top_buttons_layout.addWidget(self.open_profile_dir_btn)
+        self.top_buttons_layout.addWidget(self.system_check_btn)
+        self.top_buttons_layout.addWidget(self.save_report_btn)
+        self.top_buttons_layout.addWidget(self.backup_btn)
+        self.top_buttons_layout.addWidget(self.zoom_label)
+        self.top_buttons_layout.addWidget(self.zoom_small_btn)
+        self.top_buttons_layout.addWidget(self.zoom_medium_btn)
+        self.top_buttons_layout.addWidget(self.zoom_large_btn)
+        self.top_buttons_layout.addStretch()
+        main_layout.addLayout(self.top_buttons_layout)
+
+        # 鍒涘缓婊氬姩鍖哄煙
+        scroll_area = QtWidgets.QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_content = QtWidgets.QWidget()
+        self.layout = QtWidgets.QVBoxLayout(scroll_content)
+        scroll_area.setWidget(scroll_content)
+        main_layout.addWidget(scroll_area)
+
+        self.project鍖?= QtWidgets.QGroupBox("椤圭洰閰嶇疆鍖?)
+        self.project_layout = QtWidgets.QHBoxLayout()
+
+        self.profile_combo = QtWidgets.QComboBox()
+        self.new_profile_btn = QtWidgets.QPushButton("鏂板缓閰嶇疆")
+        self.delete_profile_btn = QtWidgets.QPushButton("鍒犻櫎閰嶇疆")
+        self.open_profile_dir_btn2 = QtWidgets.QPushButton("鎵撳紑褰撳墠閰嶇疆鐩綍")
+
+        self.project_layout.addWidget(QtWidgets.QLabel("褰撳墠椤圭洰:"))
+        self.project_layout.addWidget(self.profile_combo)
+        self.project_layout.addWidget(self.new_profile_btn)
+        self.project_layout.addWidget(self.delete_profile_btn)
+        self.project_layout.addWidget(self.open_profile_dir_btn2)
+        self.project鍖?setLayout(self.project_layout)
+        self.layout.addWidget(self.project鍖?
+
+        self.instruction_label = QtWidgets.QLabel(
+            "<b>浣跨敤璇存槑锛?/b><br>"
+            "绗竴姝ワ細閫夋嫨鎴栨柊寤洪」鐩厤缃?br>"
+            "绗簩姝ワ細鍦ㄥ綋鍓嶉厤缃笅閲囬泦妯℃澘<br>"
+            "绗笁姝ワ細鎶婅鍙戠粰缂栫▼宸ュ叿鐨勬彁绀鸿瘝绮樿创鍒颁笅闈㈣緭鍏ユ<br>"
+            "绗洓姝ワ細鐐瑰嚮銆屽姞鍏ラ槦鍒椼€嶏紝鍐嶇偣銆屽紑濮嬫墽琛屻€?br>"
+            "--- 鍙屽悜妗ユ ---<br>"
+            "绗簲姝ワ細浣跨敤鍥炰紶鍖哄皢缂栫▼宸ュ叿缁撴灉鍙戦€佸埌 ChatGPT"
+        )
+        self.instruction_label.setStyleSheet("background-color: #f0f0f0; padding: 10px; border-radius: 5px;")
+        self.instruction_label.setWordWrap(True)
+        self.layout.addWidget(self.instruction_label)
+
+        self.input_layout = QtWidgets.QHBoxLayout()
+        self.command_input = QtWidgets.QTextEdit()
+        self.command_input.setPlaceholderText("鍦ㄦ杈撳叆鎸囦护...")
+        self.wrap_button = QtWidgets.QPushButton("鑷姩鍖呰９鏍囪")
+        self.add_button = QtWidgets.QPushButton("鍔犲叆闃熷垪")
+        self.clear_queue_button = QtWidgets.QPushButton("娓呯┖闃熷垪")
+        self.clear_log_button = QtWidgets.QPushButton("娓呯┖鏃ュ織")
+        self.start_button = QtWidgets.QPushButton("寮€濮嬫墽琛?)
+        self.stop_button = QtWidgets.QPushButton("鍋滄鎵ц")
+        self.execute_one_button = QtWidgets.QPushButton("鍙墽琛屼竴鏉?)
+        self.input_layout.addWidget(QtWidgets.QLabel("鎸囦护杈撳叆:"))
+        self.input_layout.addWidget(self.command_input)
+        self.input_layout.addWidget(self.wrap_button)
+        self.input_layout.addWidget(self.add_button)
+        self.input_layout.addWidget(self.clear_queue_button)
+        self.input_layout.addWidget(self.clear_log_button)
+        self.input_layout.addWidget(self.start_button)
+        self.input_layout.addWidget(self.execute_one_button)
+        self.input_layout.addWidget(self.stop_button)
+        self.layout.addLayout(self.input_layout)
+
+        self.option_layout = QtWidgets.QHBoxLayout()
+        self.safe_mode_checkbox = QtWidgets.QCheckBox("瀹夊叏妯″紡锛堝彧绮樿创锛屼笉鍙戦€侊級")
+        self.safe_mode_checkbox.setChecked(True)
+        self.on_top_checkbox = QtWidgets.QCheckBox("绐楀彛缃《")
+        self.on_top_checkbox.setChecked(False)
+        self.option_layout.addWidget(self.safe_mode_checkbox)
+        self.option_layout.addWidget(self.on_top_checkbox)
+        self.option_layout.addWidget(QtWidgets.QLabel(""))
+        self.layout.addLayout(self.option_layout)
+
+        self.workflow鍖?= QtWidgets.QGroupBox("宸ヤ綔娴佹帶鍒跺尯")
+        self.workflow_layout = QtWidgets.QHBoxLayout()
+
+        self.one_click_send_btn = QtWidgets.QPushButton("涓€閿彂閫佸埌缂栫▼宸ュ叿")
+        self.one_click_send_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        self.one_click_return_btn = QtWidgets.QPushButton("涓€閿洖浼犲埌 ChatGPT")
+        self.one_click_return_btn.setStyleSheet("background-color: #2196F3; color: white; font-weight: bold;")
+        self.one_click_drill_btn = QtWidgets.QPushButton("涓€閿畨鍏ㄦ紨缁?)
+        self.one_click_drill_btn.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold;")
+        self.reset_workflow_btn = QtWidgets.QPushButton("閲嶇疆褰撳墠娴佺▼")
+        self.reset_workflow_btn.setStyleSheet("background-color: #f44336; color: white; font-weight: bold;")
+
+        self.workflow_layout.addWidget(self.one_click_send_btn)
+        self.workflow_layout.addWidget(self.one_click_return_btn)
+        self.workflow_layout.addWidget(self.one_click_drill_btn)
+        self.workflow_layout.addWidget(self.reset_workflow_btn)
+        self.workflow鍖?setLayout(self.workflow_layout)
+        self.layout.addWidget(self.workflow鍖?
+
+        self.鍚戝鍖?= QtWidgets.QGroupBox("棣栨浣跨敤鍚戝")
+        self.鍚戝_layout = QtWidgets.QVBoxLayout()
+
+        self.鍚戝_step_label = QtWidgets.QLabel("褰撳墠姝ラ: 鍑嗗寮€濮?)
+        self.鍚戝_step_label.setStyleSheet("font-weight: bold; font-size: 14px;")
+        self.鍚戝_desc_label = QtWidgets.QLabel("璇锋寜鐓у悜瀵兼楠ゅ畬鎴愯缃?)
+        self.鍚戝_desc_label.setWordWrap(True)
+
+        self.鍚戝_buttons_layout = QtWidgets.QHBoxLayout()
+        self.鍚戝_prev_btn = QtWidgets.QPushButton("涓婁竴姝?)
+        self.鍚戝_next_btn = QtWidgets.QPushButton("涓嬩竴姝?)
+        self.鍚戝_execute_btn = QtWidgets.QPushButton("鎵ц褰撳墠姝ラ")
+        self.鍚戝_execute_btn.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        self.鍚戝_skip_btn = QtWidgets.QPushButton("璺宠繃鍚戝")
+
+        self.鍚戝_buttons_layout.addWidget(self.鍚戝_prev_btn)
+        self.鍚戝_buttons_layout.addWidget(self.鍚戝_next_btn)
+        self.鍚戝_buttons_layout.addWidget(self.鍚戝_execute_btn)
+        self.鍚戝_buttons_layout.addWidget(self.鍚戝_skip_btn)
+
+        self.鍚戝_layout.addWidget(self.鍚戝_step_label)
+        self.鍚戝_layout.addWidget(self.鍚戝_desc_label)
+        self.鍚戝_layout.addLayout(self.鍚戝_buttons_layout)
+        self.鍚戝鍖?setLayout(self.鍚戝_layout)
+        self.layout.addWidget(self.鍚戝鍖?
+
+        self.next_step_label = QtWidgets.QLabel("涓嬩竴姝ワ細璇烽€夋嫨鎴栨柊寤洪」鐩厤缃?)
+        self.next_step_label.setStyleSheet("background-color: #E3F2FD; padding: 10px; border-radius: 5px; font-weight: bold;")
+        self.next_step_label.setWordWrap(True)
+        self.layout.addWidget(self.next_step_label)
+
+        self.鍏抽敭璇嶈缃尯 = QtWidgets.QGroupBox("鍏抽敭璇嶈瘑鍒缃尯")
+        self.鍏抽敭璇峗layout = QtWidgets.QHBoxLayout()
+
+        self.delete_keywords_label = QtWidgets.QLabel("鍒犻櫎/纭鍏抽敭璇?")
+        self.delete_keywords_input = QtWidgets.QLineEdit()
+        self.delete_keywords_input.setPlaceholderText("鍒犻櫎,纭,Yes,OK")
+        self.delete_keywords_input.setText("鍒犻櫎,纭,Yes,OK")
+
+        self.sandbox_keywords_label = QtWidgets.QLabel("鍚庡彴娌欑鍏抽敭璇?")
+        self.sandbox_keywords_input = QtWidgets.QLineEdit()
+        self.sandbox_keywords_input.setPlaceholderText("鍚庡彴,娌欑,鍚庡彴杩愯,Run in background")
+        self.sandbox_keywords_input.setText("鍚庡彴,娌欑,鍚庡彴杩愯,Run in background")
+
+        self.save_keywords_btn = QtWidgets.QPushButton("淇濆瓨鍏抽敭璇嶈缃?)
+
+        self.鍏抽敭璇峗layout.addWidget(self.delete_keywords_label)
+        self.鍏抽敭璇峗layout.addWidget(self.delete_keywords_input)
+        self.鍏抽敭璇峗layout.addWidget(self.sandbox_keywords_label)
+        self.鍏抽敭璇峗layout.addWidget(self.sandbox_keywords_input)
+        self.鍏抽敭璇峗layout.addWidget(self.save_keywords_btn)
+        self.鍏抽敭璇嶈缃尯.setLayout(self.鍏抽敭璇峗layout)
+        self.layout.addWidget(self.鍏抽敭璇嶈缃尯)
+
+        # 閲囬泦妯″紡閫夋嫨鍖?
+        self.閲囬泦妯″紡鍖?= QtWidgets.QGroupBox("閲囬泦妯″紡閫夋嫨")
+        self.閲囬泦妯″紡_layout = QtWidgets.QHBoxLayout()
+        self.capture_mode_combo = QtWidgets.QComboBox()
+        self.capture_mode_combo.addItem("绐楀彛鍖栨埅鍥鹃噰闆?, "window")
+        self.capture_mode_combo.addItem("鍏ㄥ睆閫忔槑閲囬泦", "fullscreen")
+        self.capture_mode_combo.setCurrentIndex(0)  # 榛樿閫夋嫨绐楀彛鍖栭噰闆?
+        self.capture_help_btn = QtWidgets.QPushButton("閲囬泦娴嬭瘯璇存槑")
+        self.閲囬泦妯″紡_layout.addWidget(QtWidgets.QLabel("閲囬泦妯″紡:"))
+        self.閲囬泦妯″紡_layout.addWidget(self.capture_mode_combo)
+        self.閲囬泦妯″紡_layout.addWidget(self.capture_help_btn)
+        self.閲囬泦妯″紡鍖?setLayout(self.閲囬泦妯″紡_layout)
+        self.layout.addWidget(self.閲囬泦妯″紡鍖?
+
+        self.template閲囬泦鍖?= QtWidgets.QGroupBox("妯℃澘閲囬泦鍖?)
+        self.template閲囬泦_layout = QtWidgets.QHBoxLayout()
+
+        self.capture_input_btn = QtWidgets.QPushButton("閲囬泦缂栫▼宸ュ叿杈撳叆妗?)
+        self.capture_send_btn = QtWidgets.QPushButton("閲囬泦鍙戦€佹寜閽?)
+        self.capture_delete_btn = QtWidgets.QPushButton("閲囬泦鍒犻櫎/纭鎸夐挳")
+        self.capture_sandbox_btn = QtWidgets.QPushButton("閲囬泦鍚庡彴娌欑鎸夐挳")
+        self.capture_coder_copy_btn = QtWidgets.QPushButton("閲囬泦缂栫▼宸ュ叿澶嶅埗鎸夐挳")
+        self.capture_gpt_input_btn = QtWidgets.QPushButton("閲囬泦ChatGPT杈撳叆妗?)
+        self.capture_gpt_send_btn = QtWidgets.QPushButton("閲囬泦ChatGPT鍙戦€佹寜閽?)
+        self.refresh_template_btn = QtWidgets.QPushButton("鍒锋柊妯℃澘鐘舵€?)
+
+        self.template閲囬泦_layout.addWidget(self.capture_input_btn)
+        self.template閲囬泦_layout.addWidget(self.capture_send_btn)
+        self.template閲囬泦_layout.addWidget(self.capture_delete_btn)
+        self.template閲囬泦_layout.addWidget(self.capture_sandbox_btn)
+        self.template閲囬泦_layout.addWidget(self.capture_coder_copy_btn)
+        self.template閲囬泦_layout.addWidget(self.capture_gpt_input_btn)
+        self.template閲囬泦_layout.addWidget(self.capture_gpt_send_btn)
+        self.template閲囬泦_layout.addWidget(self.refresh_template_btn)
+        self.template閲囬泦鍖?setLayout(self.template閲囬泦_layout)
+        self.layout.addWidget(self.template閲囬泦鍖?
+
+        self.template_status_layout = QtWidgets.QHBoxLayout()
+        self.template_status_layout.addWidget(QtWidgets.QLabel("妯℃澘鐘舵€?"))
+
+        self.input_status_label = QtWidgets.QLabel("杈撳叆妗? 鏈噰闆?)
+        self.send_status_label = QtWidgets.QLabel("鍙戦€佹寜閽? 鏈噰闆?)
+        self.delete_status_label = QtWidgets.QLabel("鍒犻櫎/纭: 鏈噰闆?)
+        self.sandbox_status_label = QtWidgets.QLabel("娌欑鎸夐挳: 鏈噰闆?)
+        self.coder_copy_status_label = QtWidgets.QLabel("缂栫▼澶嶅埗: 鏈噰闆?)
+        self.gpt_input_status_label = QtWidgets.QLabel("GPT杈撳叆: 鏈噰闆?)
+        self.gpt_send_status_label = QtWidgets.QLabel("GPT鍙戦€? 鏈噰闆?)
+
+        self.input_status_label.setStyleSheet("color: red;")
+        self.send_status_label.setStyleSheet("color: orange;")
+        self.delete_status_label.setStyleSheet("color: orange;")
+        self.sandbox_status_label.setStyleSheet("color: orange;")
+        self.coder_copy_status_label.setStyleSheet("color: orange;")
+        self.gpt_input_status_label.setStyleSheet("color: orange;")
+        self.gpt_send_status_label.setStyleSheet("color: orange;")
+
+        self.template_status_layout.addWidget(self.input_status_label)
+        self.template_status_layout.addWidget(self.send_status_label)
+        self.template_status_layout.addWidget(self.delete_status_label)
+        self.template_status_layout.addWidget(self.sandbox_status_label)
+        self.template_status_layout.addWidget(self.coder_copy_status_label)
+        self.template_status_layout.addWidget(self.gpt_input_status_label)
+        self.template_status_layout.addWidget(self.gpt_send_status_label)
+        self.layout.addLayout(self.template_status_layout)
+
+        self.preview_layout = QtWidgets.QHBoxLayout()
+        self.preview_layout.addWidget(QtWidgets.QLabel("妯℃澘棰勮:"))
+
+        self.input_preview_label = QtWidgets.QLabel()
+        self.input_preview_label.setFixedSize(60, 25)
+        self.input_preview_label.setStyleSheet("border: 1px solid gray; background-color: #ddd;")
+        self.send_preview_label = QtWidgets.QLabel()
+        self.send_preview_label.setFixedSize(60, 25)
+        self.send_preview_label.setStyleSheet("border: 1px solid gray; background-color: #ddd;")
+        self.delete_preview_label = QtWidgets.QLabel()
+        self.delete_preview_label.setFixedSize(60, 25)
+        self.delete_preview_label.setStyleSheet("border: 1px solid gray; background-color: #ddd;")
+        self.sandbox_preview_label = QtWidgets.QLabel()
+        self.sandbox_preview_label.setFixedSize(60, 25)
+        self.sandbox_preview_label.setStyleSheet("border: 1px solid gray; background-color: #ddd;")
+        self.coder_copy_preview_label = QtWidgets.QLabel()
+        self.coder_copy_preview_label.setFixedSize(60, 25)
+        self.coder_copy_preview_label.setStyleSheet("border: 1px solid gray; background-color: #ddd;")
+        self.gpt_input_preview_label = QtWidgets.QLabel()
+        self.gpt_input_preview_label.setFixedSize(60, 25)
+        self.gpt_input_preview_label.setStyleSheet("border: 1px solid gray; background-color: #ddd;")
+        self.gpt_send_preview_label = QtWidgets.QLabel()
+        self.gpt_send_preview_label.setFixedSize(60, 25)
+        self.gpt_send_preview_label.setStyleSheet("border: 1px solid gray; background-color: #ddd;")
+
+        self.preview_layout.addWidget(self.input_preview_label)
+        self.preview_layout.addWidget(self.send_preview_label)
+        self.preview_layout.addWidget(self.delete_preview_label)
+        self.preview_layout.addWidget(self.sandbox_preview_label)
+        self.preview_layout.addWidget(self.coder_copy_preview_label)
+        self.preview_layout.addWidget(self.gpt_input_preview_label)
+        self.preview_layout.addWidget(self.gpt_send_preview_label)
+        self.layout.addLayout(self.preview_layout)
+
+        self.calibration鍖?= QtWidgets.QGroupBox("鏍″噯娴嬭瘯鍖?)
+        self.calibration_layout = QtWidgets.QHBoxLayout()
+
+        self.test_input_btn = QtWidgets.QPushButton("娴嬭瘯璇嗗埆杈撳叆妗?)
+        self.test_send_btn = QtWidgets.QPushButton("娴嬭瘯璇嗗埆鍙戦€佹寜閽?)
+        self.test_delete_btn = QtWidgets.QPushButton("娴嬭瘯璇嗗埆鍒犻櫎/纭")
+        self.test_sandbox_btn = QtWidgets.QPushButton("娴嬭瘯璇嗗埆娌欑鎸夐挳")
+        self.test_coder_copy_btn = QtWidgets.QPushButton("娴嬭瘯璇嗗埆缂栫▼澶嶅埗")
+        self.test_gpt_input_btn = QtWidgets.QPushButton("娴嬭瘯璇嗗埆GPT杈撳叆")
+        self.test_gpt_send_btn = QtWidgets.QPushButton("娴嬭瘯璇嗗埆GPT鍙戦€?)
+        self.test_paste_btn = QtWidgets.QPushButton("瀹夊叏娴嬭瘯绮樿创")
+        self.open_dir_btn = QtWidgets.QPushButton("鎵撳紑妯℃澘鐩綍")
+
+        self.calibration_layout.addWidget(self.test_input_btn)
+        self.calibration_layout.addWidget(self.test_send_btn)
+        self.calibration_layout.addWidget(self.test_delete_btn)
+        self.calibration_layout.addWidget(self.test_sandbox_btn)
+        self.calibration_layout.addWidget(self.test_coder_copy_btn)
+        self.calibration_layout.addWidget(self.test_gpt_input_btn)
+        self.calibration_layout.addWidget(self.test_gpt_send_btn)
+        self.calibration_layout.addWidget(self.test_paste_btn)
+        self.calibration_layout.addWidget(self.open_dir_btn)
+        self.calibration鍖?setLayout(self.calibration_layout)
+        self.layout.addWidget(self.calibration鍖?
+
+        self.鍥炰紶鍖?= QtWidgets.QGroupBox("鍥炰紶鍖?(缂栫▼宸ュ叿 鈫?ChatGPT)")
+        self.鍥炰紶_layout = QtWidgets.QHBoxLayout()
+
+        self.copy_coder_btn = QtWidgets.QPushButton("澶嶅埗缂栫▼宸ュ叿缁撴灉")
+        self.paste_gpt_btn = QtWidgets.QPushButton("绮樿创鍒癈hatGPT")
+        self.copy_paste_gpt_btn = QtWidgets.QPushButton("澶嶅埗骞剁矘璐村埌ChatGPT")
+        self.gpt_safe_mode_checkbox = QtWidgets.QCheckBox("鍥炰紶瀹夊叏妯″紡锛堝彧绮樿创锛屼笉鍙戦€侊級")
+        self.gpt_safe_mode_checkbox.setChecked(True)
+
+        self.鍥炰紶_layout.addWidget(self.copy_coder_btn)
+        self.鍥炰紶_layout.addWidget(self.paste_gpt_btn)
+        self.鍥炰紶_layout.addWidget(self.copy_paste_gpt_btn)
+        self.鍥炰紶_layout.addWidget(self.gpt_safe_mode_checkbox)
+        self.鍥炰紶鍖?setLayout(self.鍥炰紶_layout)
+        self.layout.addWidget(self.鍥炰紶鍖?
+
+        self.task_status鍖?= QtWidgets.QGroupBox("浠诲姟杩愯鐘舵€?)
+        self.task_status_layout = QtWidgets.QVBoxLayout()
+
+        self.profile_label = QtWidgets.QLabel("褰撳墠閰嶇疆: 鏃?)
+        self.profile_dir_label = QtWidgets.QLabel("閰嶇疆鐩綍: 鏃?)
+        self.mode_label = QtWidgets.QLabel("褰撳墠妯″紡: 瀹夊叏妯″紡")
+        self.queue_count_label = QtWidgets.QLabel("褰撳墠闃熷垪鏁伴噺: 0")
+        self.task_label = QtWidgets.QLabel("褰撳墠浠诲姟: 鏃?)
+        self.template_result_label = QtWidgets.QLabel("鏈€鍚庢ā鏉胯瘑鍒? 鏃?)
+        self.error_label = QtWidgets.QLabel("鏈€鍚庨敊璇? 鏃?)
+        self.error_label.setStyleSheet("color: red;")
+
+        self.task_status_layout.addWidget(self.profile_label)
+        self.task_status_layout.addWidget(self.profile_dir_label)
+        self.task_status_layout.addWidget(self.mode_label)
+        self.task_status_layout.addWidget(self.queue_count_label)
+        self.task_status_layout.addWidget(self.task_label)
+        self.task_status_layout.addWidget(self.template_result_label)
+        self.task_status_layout.addWidget(self.error_label)
+        self.task_status鍖?setLayout(self.task_status_layout)
+        self.layout.addWidget(self.task_status鍖?
+
+        self.queue_view = QtWidgets.QListWidget()
+        self.layout.addWidget(QtWidgets.QLabel("鎸囦护闃熷垪鐘舵€?))
+        self.layout.addWidget(self.queue_view)
+
+        self.log_view = QtWidgets.QTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setStyleSheet("""
+            QTextEdit {
+                background-color: #2b2b2b;
+                color: #d4d4d4;
+                border: 1px solid #3e3e3e;
+                padding: 8px;
+                font-family: Consolas, 寰蒋闆呴粦;
+                font-size: 13px;
+                line-height: 1.5;
+            }
+        """)
+        self.layout.addWidget(QtWidgets.QLabel("鎿嶄綔鏃ュ織"))
+        self.layout.addWidget(self.log_view)
+
+        self.status_label = QtWidgets.QLabel("鐘舵€? 绛夊緟涓?)
+        self.layout.addWidget(self.status_label)
+
+        self.setLayout(main_layout)
+
+        self.profile_combo.currentTextChanged.connect(self.on_profile_changed)
+        self.new_profile_btn.clicked.connect(self.on_new_profile)
+        self.delete_profile_btn.clicked.connect(self.on_delete_profile)
+        self.open_profile_dir_btn.clicked.connect(self.on_open_profile_dir)
+
+        self.wrap_button.clicked.connect(self.wrap_command)
+        self.add_button.clicked.connect(self.add_command)
+        self.clear_queue_button.clicked.connect(self.clear_queue)
+        self.clear_log_button.clicked.connect(self.clear_log)
+        self.start_button.clicked.connect(self.start_execution)
+        self.stop_button.clicked.connect(self.stop_execution)
+        self.execute_one_button.clicked.connect(self.execute_single)
+
+        self.safe_mode_checkbox.stateChanged.connect(self.on_safe_mode_changed)
+        self.on_top_checkbox.stateChanged.connect(self.on_top_changed)
+
+        self.capture_input_btn.clicked.connect(lambda: self.capture_template("input"))
+        self.capture_send_btn.clicked.connect(lambda: self.capture_template("send"))
+        self.capture_delete_btn.clicked.connect(lambda: self.capture_template("delete"))
+        self.capture_sandbox_btn.clicked.connect(lambda: self.capture_template("sandbox"))
+        self.capture_coder_copy_btn.clicked.connect(lambda: self.capture_template("coder_copy"))
+        self.capture_gpt_input_btn.clicked.connect(lambda: self.capture_template("gpt_input"))
+        self.capture_gpt_send_btn.clicked.connect(lambda: self.capture_template("gpt_send"))
+        self.refresh_template_btn.clicked.connect(self.refresh_template_status)
+        self.capture_help_btn.clicked.connect(self.show_capture_help)
+
+        self.test_input_btn.clicked.connect(lambda: self.test_template("input"))
+        self.test_send_btn.clicked.connect(lambda: self.test_template("send"))
+        self.test_delete_btn.clicked.connect(lambda: self.test_template("delete"))
+        self.test_sandbox_btn.clicked.connect(lambda: self.test_template("sandbox"))
+        self.test_coder_copy_btn.clicked.connect(lambda: self.test_template("coder_copy"))
+        self.test_gpt_input_btn.clicked.connect(lambda: self.test_template("gpt_input"))
+        self.test_gpt_send_btn.clicked.connect(lambda: self.test_template("gpt_send"))
+        self.test_paste_btn.clicked.connect(self.safe_test_paste)
+        self.open_dir_btn.clicked.connect(self.open_template_directory)
+
+        self.copy_coder_btn.clicked.connect(self.copy_coder_result)
+        self.paste_gpt_btn.clicked.connect(self.paste_to_gpt)
+        self.copy_paste_gpt_btn.clicked.connect(self.copy_and_paste_to_gpt)
+
+        self.gpt_safe_mode_checkbox.stateChanged.connect(self.on_gpt_safe_mode_changed)
+
+        self.one_click_send_btn.clicked.connect(self.one_click_send_to_coder)
+        self.one_click_return_btn.clicked.connect(self.one_click_return_to_gpt)
+        self.one_click_drill_btn.clicked.connect(self.one_click_safety_drill)
+        self.reset_workflow_btn.clicked.connect(self.reset_workflow)
+
+        self.open_readme_btn.clicked.connect(self.open_readme)
+        self.open_program_dir_btn.clicked.connect(self.open_program_directory)
+        self.open_profile_dir_btn2.clicked.connect(self.on_open_profile_dir)
+        self.system_check_btn.clicked.connect(self.run_system_check)
+        self.save_report_btn.clicked.connect(self.save_diagnostic_report)
+        self.backup_btn.clicked.connect(self.create_version_backup)
+        self.save_keywords_btn.clicked.connect(self.save_keywords_settings)
+        self.zoom_small_btn.clicked.connect(lambda: self.set_ui_scale("small"))
+        self.zoom_medium_btn.clicked.connect(lambda: self.set_ui_scale("medium"))
+        self.zoom_large_btn.clicked.connect(lambda: self.set_ui_scale("large"))
+
+        self.鍚戝_prev_btn.clicked.connect(self.wizard_prev)
+        self.鍚戝_next_btn.clicked.connect(self.wizard_next)
+        self.鍚戝_execute_btn.clicked.connect(self.wizard_execute)
+        self.鍚戝_skip_btn.clicked.connect(self.wizard_skip)
+
+        self.init_profile_combo()
+        self.refresh_template_status()
+        self.init_ui_scale()
+        self.wizard_init()
+
+        self.log(f"L 妗ユ宸ュ叿 v{APP_VERSION} 宸插惎鍔?)
+        self.log(f"閰嶇疆鐩綍: {PROFILES_DIR}")
+        self.log(f"褰撳墠閰嶇疆: {profile_manager.current_profile}")
+        profile_dir = profile_manager.get_profile_dir()
+        if profile_dir:
+            self.log(f"褰撳墠閰嶇疆妯℃澘鐩綍: {profile_dir}")
+        self.log(f"瀹夊叏妯″紡: {'寮€鍚? if self.safe_mode else '鍏抽棴'}")
+        self.log(f"鍥炰紶瀹夊叏妯″紡: {'寮€鍚? if self.gpt_safe_mode else '鍏抽棴'}")
+        if pyperclip is None:
+            self.log("璀﹀憡: pyperclip 鏈畨瑁咃紝鏂囨湰绮樿创灏嗕娇鐢?pyautogui.typewrite锛堜笉鏀寔涓枃锛?)
+
+    def init_profile_combo(self):
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        for name in profile_manager.profiles.keys():
+            self.profile_combo.addItem(name)
+        if profile_manager.current_profile:
+            idx = self.profile_combo.findText(profile_manager.current_profile)
+            if idx >= 0:
+                self.profile_combo.setCurrentIndex(idx)
+        self.profile_combo.blockSignals(False)
+        self.update_profile_display()
+
+    def update_profile_display(self):
+        self.profile_label.setText(f"褰撳墠閰嶇疆: {profile_manager.current_profile}")
+        profile_dir = profile_manager.get_profile_dir()
+        self.profile_dir_label.setText(f"閰嶇疆鐩綍: {profile_dir}")
+
+    def on_profile_changed(self, profile_name):
+        try:
+            if not profile_name or profile_name == profile_manager.current_profile:
+                return
+            success, msg = profile_manager.switch_profile(profile_name)
+            if success:
+                self.load_profile_settings()
+                self.refresh_template_status()
+                self.clear_queue_display()
+                self.init_ui_scale()
+                self.wizard_init()
+                self.log(msg)
+            else:
+                self.set_error(msg)
+                idx = self.profile_combo.findText(profile_manager.current_profile)
+                if idx >= 0:
+                    self.profile_combo.blockSignals(True)
+                    self.profile_combo.setCurrentIndex(idx)
+                    self.profile_combo.blockSignals(False)
+        except Exception as e:
+            self.set_error(f"鍒囨崲閰嶇疆寮傚父: {str(e)}")
+            self.log(f"鍒囨崲閰嶇疆寮傚父: {str(e)}")
+
+    def load_profile_settings(self):
+        try:
+            config = profile_manager.load_profile_config(profile_manager.current_profile)
+            self.safe_mode = config.get("safe_mode", True)
+            self.gpt_safe_mode = config.get("gpt_safe_mode", True)
+            self.safe_mode_checkbox.blockSignals(True)
+            self.safe_mode_checkbox.setChecked(self.safe_mode)
+            self.safe_mode_checkbox.blockSignals(False)
+            self.gpt_safe_mode_checkbox.blockSignals(True)
+            self.gpt_safe_mode_checkbox.setChecked(self.gpt_safe_mode)
+            self.gpt_safe_mode_checkbox.blockSignals(False)
+            self.update_mode_display()
+
+            delete_keywords = config.get("delete_keywords", "鍒犻櫎,纭,Yes,OK")
+            sandbox_keywords = config.get("sandbox_keywords", "鍚庡彴,娌欑,鍚庡彴杩愯,Run in background")
+            self.delete_keywords_input.blockSignals(True)
+            self.delete_keywords_input.setText(delete_keywords)
+            self.delete_keywords_input.blockSignals(False)
+            self.sandbox_keywords_input.blockSignals(True)
+            self.sandbox_keywords_input.setText(sandbox_keywords)
+            self.sandbox_keywords_input.blockSignals(False)
+        except Exception as e:
+            self.log(f"鍔犺浇閰嶇疆璁剧疆澶辫触: {str(e)}")
+
+    def save_profile_settings(self):
+        try:
+            self.safe_mode = self.safe_mode_checkbox.isChecked()
+            self.gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+            profile_manager.safe_mode = self.safe_mode
+            profile_manager.gpt_safe_mode = self.gpt_safe_mode
+            profile_manager.save_profile_config()
+        except Exception as e:
+            self.log(f"淇濆瓨閰嶇疆璁剧疆澶辫触: {str(e)}")
+
+    def save_keywords_settings(self):
+        try:
+            delete_keywords = self.delete_keywords_input.text().strip()
+            sandbox_keywords = self.sandbox_keywords_input.text().strip()
+            profile_manager.save_profile_config(
+                delete_keywords=delete_keywords,
+                sandbox_keywords=sandbox_keywords
+            )
+            self.log(f"鍏抽敭璇嶈缃凡淇濆瓨")
+            self.log(f"鍒犻櫎/纭鍏抽敭璇? {delete_keywords}")
+            self.log(f"鍚庡彴娌欑鍏抽敭璇? {sandbox_keywords}")
+        except Exception as e:
+            self.log(f"淇濆瓨鍏抽敭璇嶈缃け璐? {str(e)}")
+            self.set_error(f"淇濆瓨鍏抽敭璇嶈缃け璐? {str(e)}")
+
+    def on_new_profile(self):
+        text, ok = QtWidgets.QInputDialog.getText(
+            self, "鏂板缓閰嶇疆", "璇疯緭鍏ラ厤缃悕绉?\n(涓嶈兘鍖呭惈鐗规畩瀛楃: < > : \" / \\ | ? *)"
+        )
+        if not ok or not text:
+            self.log("鏂板缓閰嶇疆宸插彇娑?)
+            return
+
+        success, msg = profile_manager.create_profile(text)
+        if success:
+            self.init_profile_combo()
+            idx = self.profile_combo.findText(text)
+            if idx >= 0:
+                self.profile_combo.setCurrentIndex(idx)
+            self.load_profile_settings()
+            self.refresh_template_status()
+            self.clear_queue_display()
+        else:
+            self.set_error(msg)
+        self.log(msg)
+
+    def on_delete_profile(self):
+        if len(profile_manager.profiles) <= 1:
+            self.log("鑷冲皯淇濈暀涓€涓厤缃紝鏃犳硶鍒犻櫎")
+            self.set_error("鑷冲皯淇濈暀涓€涓厤缃?)
+            return
+
+        current = profile_manager.current_profile
+        reply = QtWidgets.QMessageBox.question(
+            self, "鍒犻櫎閰嶇疆纭",
+            f"纭畾瑕佸垹闄ら厤缃?'{current}' 鍚楋紵\n璇ユ搷浣滀笉鍙仮澶嶃€?,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+
+        if reply != QtWidgets.QMessageBox.Yes:
+            self.log("鍒犻櫎閰嶇疆宸插彇娑?)
+            return
+
+        success, msg = profile_manager.delete_profile(current)
+        if success:
+            first_profile = list(profile_manager.profiles.keys())[0]
+            profile_manager.switch_profile(first_profile)
+            self.init_profile_combo()
+            self.load_profile_settings()
+            self.refresh_template_status()
+            self.clear_queue_display()
+        else:
+            self.set_error(msg)
+        self.log(msg)
+
+    def on_open_profile_dir(self):
+        try:
+            profile_dir = profile_manager.get_profile_dir()
+            if profile_dir and profile_dir.exists():
+                os.startfile(str(profile_dir))
+                self.log(f"宸叉墦寮€閰嶇疆鐩綍: {profile_dir}")
+            else:
+                self.log("閰嶇疆鐩綍涓嶅瓨鍦?)
+                self.set_error("閰嶇疆鐩綍涓嶅瓨鍦?)
+        except Exception as e:
+            self.log(f"鎵撳紑閰嶇疆鐩綍澶辫触: {str(e)}")
+            self.set_error(f"鎵撳紑鐩綍澶辫触: {str(e)}")
+
+    def clear_queue_display(self):
+        self.queue_view.clear()
+
+    def get_current_queue(self):
+        return profile_manager.get_queue()
+
+    @QtCore.pyqtSlot(str)
+    def on_log_signal(self, message):
+        self.log(message)
+
+    @QtCore.pyqtSlot(str)
+    def on_status_signal(self, message):
+        self.status_label.setText(message)
+
+    @QtCore.pyqtSlot(str, str)
+    def on_queue_update_signal(self, cmd, status):
+        self.update_queue_item(cmd, status)
+
+    @QtCore.pyqtSlot(str, str, str, str)
+    def on_status_update_signal(self, mode, task, template_result, error):
+        self.current_mode = mode
+        self.current_task_summary = task
+        self.last_template_result = template_result
+        self.last_error = error
+        self.update_task_status_display()
+
+    def update_task_status_display(self):
+        self.mode_label.setText(f"褰撳墠妯″紡: {self.current_mode}")
+        self.queue_count_label.setText(f"褰撳墠闃熷垪鏁伴噺: {self.get_current_queue().qsize()}")
+        self.task_label.setText(f"褰撳墠浠诲姟: {self.current_task_summary[:30]}...")
+        self.template_result_label.setText(f"鏈€鍚庢ā鏉胯瘑鍒? {self.last_template_result}")
+        self.error_label.setText(f"鏈€鍚庨敊璇? {self.last_error}")
+        if self.last_error and self.last_error != "鏃?:
+            self.error_label.setStyleSheet("color: red;")
+        else:
+            self.error_label.setStyleSheet("color: green;")
+
+    def update_mode_display(self):
+        if self.safe_mode_checkbox.isChecked():
+            self.current_mode = "瀹夊叏妯″紡"
+        else:
+            self.current_mode = "鐪熷疄鎵ц妯″紡"
+        self.update_task_status_display()
+
+    def on_safe_mode_changed(self):
+        self.safe_mode = self.safe_mode_checkbox.isChecked()
+        self.update_mode_display()
+        self.log(f"妯″紡鍒囨崲: {self.current_mode}")
+        self.save_profile_settings()
+
+    def on_gpt_safe_mode_changed(self):
+        self.gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+        mode_str = "瀹夊叏妯″紡" if self.gpt_safe_mode else "鐪熷疄鎵ц妯″紡"
+        self.log(f"鍥炰紶妯″紡鍒囨崲: {mode_str}")
+        self.save_profile_settings()
+
+    def on_top_changed(self):
+        if self.on_top_checkbox.isChecked():
+            self.setWindowFlags(self.windowFlags() | QtCore.Qt.WindowStaysOnTopHint)
+            self.log("绐楀彛宸茬疆椤?)
+        else:
+            self.setWindowFlags(self.windowFlags() & ~QtCore.Qt.WindowStaysOnTopHint)
+            self.log("绐楀彛宸插彇娑堢疆椤?)
+        self.show()
+
+    def set_error(self, error_msg):
+        self.last_error = error_msg
+        self.error_label.setText(f"鏈€鍚庨敊璇? {error_msg}")
+        self.error_label.setStyleSheet("color: red;")
+
+    def clear_error(self):
+        self.last_error = "鏃?
+        self.error_label.setText("鏈€鍚庨敊璇? 鏃?)
+        self.error_label.setStyleSheet("color: green;")
+
+    def log(self, message):
+        timestamp = time.strftime("%H:%M:%S")
+        self.log_view.append(f"[{timestamp}] {message}")
+        self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
+
+    def wrap_command(self):
+        cmd = self.command_input.toPlainText().strip()
+        if not cmd:
+            self.log("璀﹀憡: 杈撳叆鎸囦护涓虹┖锛屾棤娉曞寘瑁?)
+            return
+
+        if "<<PROMPT>>" in cmd and "<<END>>" in cmd:
+            self.log("鎸囦护宸插寘鍚爣璁帮紝鏃犻渶閲嶅鍖呰９")
+            return
+
+        wrapped = f"<<PROMPT>>\n{cmd}\n<<END>>"
+        self.command_input.setPlainText(wrapped)
+        self.log("宸茶嚜鍔ㄥ寘瑁规彁绀鸿瘝鏍囪")
+
+    def auto_wrap(self, cmd):
+        if "<<PROMPT>>" not in cmd or "<<END>>" not in cmd:
+            return f"<<PROMPT>>\n{cmd}\n<<END>>"
+        return cmd
+
+    def add_command(self):
+        cmd = self.command_input.toPlainText().strip()
+        if cmd:
+            wrapped_cmd = self.auto_wrap(cmd)
+            self.get_current_queue().put(wrapped_cmd)
+
+            display_text = wrapped_cmd[:80] + "..." if len(wrapped_cmd) > 80 else wrapped_cmd
+            self.queue_view.addItem(f"[寰呮墽琛宂 {display_text}")
+            self.log(f"宸插姞鍏ラ槦鍒? {display_text}")
+            self.command_input.clear()
+            self.update_task_status_display()
+        else:
+            self.log("璀﹀憡: 杈撳叆鎸囦护涓虹┖")
+
+    def clear_queue(self):
+        q = self.get_current_queue()
+        while not q.empty():
+            try:
+                q.get_nowait()
+            except:
+                break
+        self.queue_view.clear()
+        self.log("宸叉竻绌哄緟鎵ц闃熷垪")
+        self.update_task_status_display()
+
+    def clear_log(self):
+        self.log_view.clear()
+        self.log("宸叉竻绌烘棩蹇?)
+
+    def update_queue_item(self, original_cmd, status):
+        for i in range(self.queue_view.count()):
+            item = self.queue_view.item(i)
+            text = item.text()
+            if original_cmd[:80] in text or original_cmd[:40] in text:
+                display_text = original_cmd[:80] + "..." if len(original_cmd) > 80 else original_cmd
+                item.setText(f"[{status}] {display_text}")
+                break
+
+    def get_template_path(self, template_name):
+        return profile_manager.get_template_path(template_name)
+
+    def refresh_template_status(self):
+        self.clear_error()
+        profile_dir = profile_manager.get_profile_dir()
+
+        templates_status = [
+            ("input_box_template.png", self.input_status_label, self.input_preview_label),
+            ("send_button_template.png", self.send_status_label, self.send_preview_label),
+            ("delete_popup.png", self.delete_status_label, self.delete_preview_label),
+            ("sandbox_button.png", self.sandbox_status_label, self.sandbox_preview_label),
+            ("coder_copy_button.png", self.coder_copy_status_label, self.coder_copy_preview_label),
+            ("gpt_input_box.png", self.gpt_input_status_label, self.gpt_input_preview_label),
+            ("gpt_send_button.png", self.gpt_send_status_label, self.gpt_send_preview_label),
+        ]
+
+        for template_name, status_label, preview_label in templates_status:
+            if profile_dir:
+                template_path = profile_dir / template_name
+            else:
+                template_path = None
+
+            if template_path and template_path.exists():
+                status_label.setText(f"{template_name.split('_')[0]}: 宸查噰闆?)
+                status_label.setStyleSheet("color: green;")
+                self.update_preview_image(preview_label, template_path)
+            else:
+                short_name = template_name.split('_')[0]
+                status_label.setText(f"{short_name}: 鏈噰闆?)
+                status_label.setStyleSheet("color: orange;")
+                preview_label.setText("鏈噰闆?)
+                preview_label.setAlignment(QtCore.Qt.AlignCenter)
+
+        self.update_profile_display()
+        self.wizard_update_display()
+        self.update_next_step_hint()
+
+    def update_preview_image(self, label, template_path):
+        try:
+            img = read_cv_image_unicode(template_path)
+            if img is not None:
+                h, w = img.shape[:2]
+                aspect = w / h if h > 0 else 1
+                label_w = 60
+                label_h = int(label_w / aspect)
+                if label_h > 25:
+                    label_h = 25
+                    label_w = int(label_h * aspect)
+                if label_w < 10:
+                    label_w = 10
+                if label_h < 10:
+                    label_h = 10
+                img_resized = cv2.resize(img, (label_w, label_h))
+                img_rgb = cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB)
+                h, w = img_rgb.shape[:2]
+                bytes_per_line = 3 * w
+                q_image = QtGui.QImage(img_rgb.data, w, h, bytes_per_line, QtGui.QImage.Format_RGB888)
+                pixmap = QtGui.QPixmap.fromImage(q_image)
+                label.setPixmap(pixmap)
+                label.setAlignment(QtCore.Qt.AlignCenter)
+            else:
+                label.setText("璇诲彇澶辫触")
+        except Exception as e:
+            label.setText("棰勮澶辫触")
+
+    def show_capture_help(self):
+        try:
+            help_text = """濡傛灉鍏ㄥ睆閲囬泦寮傚父锛岃浣跨敤榛樿鐨勭獥鍙ｅ寲鎴浘閲囬泦銆俓n\n绐楀彛鍖栭噰闆嗕細鍏堟埅鍥撅紝鍐嶅湪鎴浘绐楀彛閲屾閫夛紝鏇寸ǔ瀹氥€俓n\n鎿嶄綔姝ラ锛歕n1. 閫夋嫨绐楀彛鍖栨埅鍥鹃噰闆嗘ā寮廫n2. 鐐瑰嚮閲囬泦鎸夐挳\n3. 鍒囧埌鐩爣鐣岄潰鍚庣偣鍑荤‘瀹歕n4. 鍦ㄦ埅鍥剧獥鍙ｉ噷妗嗛€夌洰鏍囧尯鍩焅n5. 鎸?Enter 纭鎴?ESC 鍙栨秷\n\n鍏ㄥ睆閫忔槑閲囬泦浣滀负澶囩敤妯″紡锛岄€傚悎蹇€熼噰闆嗐€?""
+            QtWidgets.QMessageBox.information(self, "閲囬泦娴嬭瘯璇存槑", help_text)
+        except Exception as e:
+            self.log(f"鏄剧ず閲囬泦璇存槑澶辫触: {str(e)}")
+
+
+    def capture_template(self, template_type):
+        template_map = {
+            "input": ("input_box_template.png", "缂栫▼宸ュ叿杈撳叆妗?),
+            "send": ("send_button_template.png", "缂栫▼宸ュ叿鍙戦€佹寜閽?),
+            "delete": ("delete_popup.png", "鍒犻櫎/纭鎸夐挳"),
+            "sandbox": ("sandbox_button.png", "鍚庡彴娌欑鎸夐挳"),
+            "coder_copy": ("coder_copy_button.png", "缂栫▼宸ュ叿澶嶅埗缁撴灉鎸夐挳"),
+            "gpt_input": ("gpt_input_box.png", "ChatGPT 杈撳叆妗?),
+            "gpt_send": ("gpt_send_button.png", "ChatGPT 鍙戦€佹寜閽?),
+        }
+        if template_type not in template_map:
+            self.log(f"鏈煡妯℃澘绫诲瀷: {template_type}")
+            self.set_error(f"鏈煡妯℃澘绫诲瀷: {template_type}")
+            return
+
+        template_name, label = template_map[template_type]
+        try:
+            reply = QtWidgets.QMessageBox.question(
+                self, "閲囬泦妯℃澘",
+                f"鍑嗗閲囬泦锛歿label}\n\n纭鍚?L 浼氶殣钘忓苟鎴浘锛岀劧鍚庡湪鎴浘绐楀彛閲屾閫夊尯鍩熴€?,
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+            )
+            if reply != QtWidgets.QMessageBox.Yes:
+                self.log(f"閲囬泦宸插彇娑? {label}")
+                return
+
+            self.log(f"鍑嗗閲囬泦 {template_name}锛屽綋鍓嶉厤缃? {profile_manager.current_profile}")
+            self.hide()
+            QtWidgets.QApplication.processEvents()
+            time.sleep(0.8)
+
+            screenshot = capture_screen_pil(self.log if hasattr(self, "log") else None)
+
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            QtWidgets.QApplication.processEvents()
+
+            if screenshot is None:
+                self.log("閲囬泦澶辫触: 鎴浘杩斿洖 None")
+                self.set_error("閲囬泦澶辫触: 鎴浘澶辫触")
+                self.refresh_template_status()
+                self.update_next_step_hint()
+                return
+
+            self.log(f"鎴浘鎴愬姛锛屽師鍥惧昂瀵? {screenshot.size[0]}x{screenshot.size[1]}")
+            selector = WindowedRegionSelector(screenshot, self)
+            result = selector.exec_()
+
+            if result != QtWidgets.QMessageBox.Accepted:
+                self.log(f"閲囬泦宸插彇娑? {template_name}")
+                self.refresh_template_status()
+                self.update_next_step_hint()
+                return
+
+            cropped = selector.get_cropped_image()
+            if cropped is None:
+                self.log("閲囬泦澶辫触: 娌℃湁鏈夋晥閫夊尯")
+                self.set_error("閲囬泦澶辫触: 娌℃湁鏈夋晥閫夊尯")
+                self.refresh_template_status()
+                self.update_next_step_hint()
+                return
+
+            template_path = profile_manager.get_template_path(template_name)
+            if template_path is None:
+                self.log("閲囬泦澶辫触: 鏃犳硶鑾峰彇褰撳墠閰嶇疆妯℃澘璺緞")
+                self.set_error("閲囬泦澶辫触: 鏃犳硶鑾峰彇褰撳墠閰嶇疆妯℃澘璺緞")
+                return
+
+            template_path.parent.mkdir(parents=True, exist_ok=True)
+            cropped.save(str(template_path))
+
+            exists = template_path.exists()
+            size = template_path.stat().st_size if exists else 0
+            self.log(f"淇濆瓨鎴愬姛: {template_path}")
+            self.log(f"鏂囦欢瀛樺湪: {exists}锛屾枃浠跺ぇ灏? {size} bytes")
+
+            test_img = read_cv_image_unicode(template_path)
+            if test_img is None:
+                self.log(f"淇濆瓨鍚庨獙璇佽鍙栧け璐?)
+                self.set_error(f"妯℃澘淇濆瓨浜嗭紝浣嗚鍙栧け璐?)
+            else:
+                h, w = test_img.shape[:2]
+                self.log(f"淇濆瓨鍚庨獙璇佽鍙栨垚鍔? {w}x{h}")
+                self.set_error("")
+
+            self.refresh_template_status()
+            self.update_next_step_hint()
+
+        except Exception as e:
+            try:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+            except Exception:
+                pass
+            self.log(f"閲囬泦寮傚父: {e}")
+            self.set_error(f"閲囬泦寮傚父: {e}")
+            try:
+                self.refresh_template_status()
+                self.update_next_step_hint()
+            except Exception:
+                pass
+
+    def take_screenshot(self):
+        try:
+            pil_img = capture_screen_pil(log_fn=self.log)
+            if pil_img is None:
+                raise RuntimeError("capture_screen_pil 杩斿洖 None")
+            rgb = np.array(pil_img.convert("RGB"))
+            return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+        except Exception as e:
+            self.set_error(f"鎴浘澶辫触: {str(e)}")
+            raise
+
+    def find_template_with_score(self, template_name, threshold=0.75):
+        template_path = self.get_template_path(template_name)
+        if not template_path:
+            return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+        try:
+            if not template_path.exists():
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            try:
+                screenshot = self.take_screenshot()
+            except Exception as e:
+                self.log(f"鎴浘澶辫触: {str(e)}")
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            try:
+                template = read_cv_image_unicode(template_path)
+                if template is None:
+                    self.log(f"妯℃澘鏂囦欢瀛樺湪浣嗚鍙栧け璐ワ紝鍙兘鏄腑鏂囪矾寰勬垨鍥剧墖鎹熷潖: {template_path}")
+                    return {"found": False, "center_x": None, "center_y": None, "score": 0}
+                h, w = template.shape[:2]
+                self.log(f"妯℃澘璇诲彇鎴愬姛: {template_name} 灏哄: {w}x{h}")
+            except Exception as e:
+                self.log(f"璇诲彇妯℃澘澶辫触: {str(e)}")
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            if template is None:
+                return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+            res = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+            min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(res)
+
+            if max_val > threshold:
+                h, w = template.shape[:2]
+                center_x = max_loc[0] + w // 2
+                center_y = max_loc[1] + h // 2
+                return {"found": True, "center_x": center_x, "center_y": center_y, "score": max_val}
+
+            return {"found": False, "center_x": None, "center_y": None, "score": max_val}
+        except Exception as e:
+            self.log(f"妯℃澘鍖归厤寮傚父: {str(e)}")
+            self.set_error(f"妯℃澘鍖归厤寮傚父: {str(e)}")
+            return {"found": False, "center_x": None, "center_y": None, "score": 0}
+
+    def find_template_center(self, template_name, threshold=0.75):
+        result = self.find_template_with_score(template_name, threshold)
+        if result["found"]:
+            return (result["center_x"], result["center_y"])
+        return None
+
+    def test_template(self, template_type):
+        template_map = {
+            "input": "input_box_template.png",
+            "send": "send_button_template.png",
+            "delete": "delete_popup.png",
+            "sandbox": "sandbox_button.png",
+            "coder_copy": "coder_copy_button.png",
+            "gpt_input": "gpt_input_box.png",
+            "gpt_send": "gpt_send_button.png"
+        }
+
+        template_name = template_map.get(template_type)
+        if not template_name:
+            self.log(f"鏈煡鐨勬ā鏉跨被鍨? {template_type}")
+            return
+
+        template_path = self.get_template_path(template_name)
+        if not template_path or not template_path.exists():
+            self.log(f"娴嬭瘯璇嗗埆 {template_name}: 妯℃澘鏂囦欢涓嶅瓨鍦?)
+            self.set_error(f"妯℃澘涓嶅瓨鍦? {template_name}")
+            return
+
+        self.log(f"寮€濮嬫祴璇曡瘑鍒? {template_name}")
+        self.clear_error()
+        result = self.find_template_with_score(template_name)
+
+        if result["found"]:
+            result_str = f"鏄?(鍒嗘暟:{result['score']:.4f} 鍧愭爣:({result['center_x']},{result['center_y']}))"
+            self.last_template_result = result_str
+            self.log(f"  妯℃澘鍚? {template_name}")
+            self.log(f"  鏄惁鎵惧埌: 鏄?)
+            self.log(f"  鍖归厤鍒嗘暟: {result['score']:.4f}")
+            self.log(f"  涓績鍧愭爣: ({result['center_x']}, {result['center_y']})")
+            try:
+                pyautogui.moveTo(result['center_x'], result['center_y'])
+                self.log(f"  榧犳爣宸茬Щ鍔ㄥ埌涓績鐐癸紙鏈偣鍑伙級")
+            except Exception as e:
+                self.log(f"  榧犳爣绉诲姩澶辫触: {str(e)}")
+                self.set_error(f"榧犳爣绉诲姩澶辫触: {str(e)}")
+        else:
+            result_str = f"鍚?(鏈€楂樺垎鏁?{result['score']:.4f})"
+            self.last_template_result = result_str
+            self.log(f"  妯℃澘鍚? {template_name}")
+            self.log(f"  鏄惁鎵惧埌: 鍚?)
+            self.log(f"  鏈€楂樺尮閰嶅垎鏁? {result['score']:.4f}")
+            self.log(f"  鎻愮ず: 鍒嗘暟浣庝簬闃堝€?{0.75}锛岃妫€鏌ユā鏉胯川閲?)
+
+        self.update_task_status_display()
+
+    def safe_test_paste(self):
+        template_path = self.get_template_path("input_box_template.png")
+        if not template_path or not template_path.exists():
+            self.log("瀹夊叏娴嬭瘯澶辫触: 杈撳叆妗嗘ā鏉夸笉瀛樺湪")
+            self.set_error("杈撳叆妗嗘ā鏉夸笉瀛樺湪")
+            return
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "瀹夊叏娴嬭瘯绮樿创纭",
+            "鏄惁寮€濮嬪畨鍏ㄦ祴璇曠矘璐达紵\n娴嬭瘯鏂囨湰灏嗙矘璐村埌杈撳叆妗嗭紝浣嗕笉浼氱偣鍑诲彂閫併€?,
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+
+        if reply != QtWidgets.QMessageBox.Yes:
+            self.log("瀹夊叏娴嬭瘯宸插彇娑?)
+            return
+
+        self.log("寮€濮嬪畨鍏ㄦ祴璇曠矘璐?..")
+        self.clear_error()
+
+        result = self.find_template_with_score("input_box_template.png")
+        if not result["found"]:
+            self.log("瀹夊叏娴嬭瘯澶辫触: 鏈壘鍒拌緭鍏ユ")
+            self.set_error("鏈壘鍒拌緭鍏ユ")
+            return
+
+        input_pos = (result["center_x"], result["center_y"])
+        self.log(f"姝ラ1: 鎵惧埌杈撳叆妗嗭紝浣嶇疆: {input_pos}锛屽垎鏁? {result['score']:.4f}")
+
+        try:
+            pyautogui.click(input_pos[0], input_pos[1])
+            self.log("姝ラ2: 宸茬偣鍑昏緭鍏ユ")
+        except Exception as e:
+            self.log(f"鐐瑰嚮杈撳叆妗嗗け璐? {str(e)}")
+            self.set_error(f"鐐瑰嚮澶辫触: {str(e)}")
+            return
+
+        time.sleep(0.3)
+
+        test_text = "L宸ュ叿瀹夊叏娴嬭瘯锛氬鏋滅湅鍒拌繖鍙ヨ瘽锛岃鏄庝腑鏂囩矘璐存甯搞€?
+        self.log(f"姝ラ3: 鍑嗗绮樿创娴嬭瘯鏂囨湰")
+
+        try:
+            if pyperclip:
+                pyperclip.copy(test_text)
+                self.log("姝ラ4: 宸插鍒跺埌鍓创鏉?(pyperclip)")
+                pyautogui.hotkey('ctrl', 'v')
+                self.log("姝ラ5: 宸蹭娇鐢?Ctrl+V 绮樿创")
+            else:
+                pyautogui.typewrite(test_text)
+                self.log("姝ラ4: 宸蹭娇鐢?pyautogui.typewrite 绮樿创锛堜笉鏀寔涓枃锛?)
+        except Exception as e:
+            self.log(f"绮樿创澶辫触: {str(e)}")
+            self.set_error(f"绮樿创澶辫触: {str(e)}")
+            return
+
+        self.log("瀹夊叏娴嬭瘯瀹屾垚锛氭枃鏈凡绮樿创锛屾湭鐐瑰嚮鍙戦€?)
+
+    def open_template_directory(self):
+        try:
+            profile_dir = profile_manager.get_profile_dir()
+            if profile_dir and profile_dir.exists():
+                os.startfile(str(profile_dir))
+                self.log(f"宸叉墦寮€妯℃澘鐩綍: {profile_dir}")
+            else:
+                self.log("妯℃澘鐩綍涓嶅瓨鍦?)
+                self.set_error("妯℃澘鐩綍涓嶅瓨鍦?)
+        except Exception as e:
+            self.log(f"鎵撳紑妯℃澘鐩綍澶辫触: {str(e)}")
+            self.set_error(f"鎵撳紑鐩綍澶辫触: {str(e)}")
+
+    def click_position(self, pos, offset=0):
+        try:
+            if pos:
+                pyautogui.click(pos[0] + offset, pos[1] + offset)
+                return True
+        except Exception as e:
+            self.log(f"鐐瑰嚮浣嶇疆澶辫触: {str(e)}")
+            self.set_error(f"鐐瑰嚮澶辫触: {str(e)}")
+        return False
+
+    def handle_popup(self):
+        result = self.find_template_with_score("delete_popup.png")
+        if result["found"]:
+            popup_pos = (result["center_x"], result["center_y"])
+            if self.click_position(popup_pos):
+                self.log("寮圭獥宸茶嚜鍔ㄥ鐞? 鐐瑰嚮鍒犻櫎/纭鎸夐挳锛堟ā鏉挎柟寮忥級")
+                return True
+
+        self.log("妯℃澘鏂瑰紡鏈壘鍒板脊绐楋紝灏濊瘯鍏抽敭璇嶆柟寮?..")
+        keywords_str = self.delete_keywords_input.text().strip()
+        if keywords_str:
+            keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+            button_obj = self.find_button_by_keywords(keywords)
+            if button_obj:
+                try:
+                    button_obj.click()
+                    self.log(f"寮圭獥宸茶嚜鍔ㄥ鐞? 鐐瑰嚮鎸夐挳锛堝叧閿瘝鏂瑰紡锛?)
+                    return True
+                except Exception as e:
+                    self.log(f"鍏抽敭璇嶆柟寮忕偣鍑诲け璐? {str(e)}")
+        else:
+            self.log("鍏抽敭璇嶄负绌猴紝璺宠繃鍏抽敭璇嶆柟寮?)
+        return False
+
+    def find_button_by_keywords(self, keywords):
+        if not PYWINAUTO_AVAILABLE:
+            self.log("pywinauto 涓嶅彲鐢紝鏃犳硶浣跨敤鍏抽敭璇嶈瘑鍒?)
+            return None
+
+        try:
+            desktop = Desktop(backend="uia")
+            windows = desktop.windows()
+            for window in windows:
+                try:
+                    window_title = window.window_text()
+                    if window_title:
+                        pass
+                    buttons = window.children(control_type="Button")
+                    for button in buttons:
+                        try:
+                            button_name = button.window_text()
+                            if button_name:
+                                for keyword in keywords:
+                                    if keyword.lower() in button_name.lower():
+                                        self.log(f"鎵惧埌鍖归厤鎸夐挳: '{button_name}' (鍖归厤鍏抽敭璇? '{keyword}')")
+                                        return button
+                        except Exception:
+                            continue
+                except Exception:
+                    continue
+            self.log("鏈壘鍒板尮閰嶅叧閿瘝鐨勬寜閽?)
+            return None
+        except Exception as e:
+            self.log(f"鍏抽敭璇嶈瘑鍒け璐? {str(e)}")
+            return None
+
+    def copy_coder_result(self):
+        self.log("寮€濮嬪鍒剁紪绋嬪伐鍏风粨鏋?..")
+        self.clear_error()
+
+        template_path = self.get_template_path("coder_copy_button.png")
+        if not template_path or not template_path.exists():
+            self.log("澶嶅埗澶辫触: coder_copy_button.png 妯℃澘涓嶅瓨鍦?)
+            self.set_error("缂栫▼澶嶅埗鎸夐挳妯℃澘涓嶅瓨鍦?)
+            return False
+
+        result = self.find_template_with_score("coder_copy_button.png")
+        if not result["found"]:
+            self.log(f"澶嶅埗澶辫触: 鏈壘鍒扮紪绋嬪鍒舵寜閽?(鏈€楂樺垎鏁? {result['score']:.4f})")
+            self.set_error("鏈壘鍒扮紪绋嬪鍒舵寜閽?)
+            return False
+
+        copy_pos = (result["center_x"], result["center_y"])
+        self.log(f"鎵惧埌缂栫▼澶嶅埗鎸夐挳锛屼綅缃? {copy_pos}锛屽垎鏁? {result['score']:.4f}")
+
+        try:
+            pyautogui.click(copy_pos[0], copy_pos[1])
+            self.log("宸茬偣鍑荤紪绋嬪鍒舵寜閽?)
+        except Exception as e:
+            self.log(f"鐐瑰嚮缂栫▼澶嶅埗鎸夐挳澶辫触: {str(e)}")
+            self.set_error(f"鐐瑰嚮澶辫触: {str(e)}")
+            return False
+
+        time.sleep(0.5)
+
+        try:
+            if pyperclip:
+                clipboard_text = pyperclip.paste()
+                if clipboard_text:
+                    preview = clipboard_text[:120] + "..." if len(clipboard_text) > 120 else clipboard_text
+                    preview = preview.replace("\n", " ")
+                    self.log(f"澶嶅埗鎴愬姛锛佸壀璐存澘鍐呭鍓?20瀛? {preview}")
+                    self.last_template_result = f"澶嶅埗鎴愬姛 ({len(clipboard_text)}瀛楃)"
+                else:
+                    self.log("澶嶅埗鎴愬姛锛屼絾鍓创鏉夸负绌?)
+                    self.last_template_result = "澶嶅埗鎴愬姛 (鍓创鏉跨┖)"
+            else:
+                self.log("澶嶅埗鎴愬姛锛堟棤娉曡鍙栧壀璐存澘锛宲yperclip鏈畨瑁咃級")
+                self.last_template_result = "澶嶅埗鎴愬姛"
+        except Exception as e:
+            self.log(f"璇诲彇鍓创鏉垮け璐? {str(e)}")
+            self.set_error(f"璇诲彇鍓创鏉垮け璐? {str(e)}")
+            return False
+
+        self.update_task_status_display()
+        return True
+
+    def paste_to_gpt(self):
+        safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+        mode_str = "瀹夊叏妯″紡" if safe_mode else "鐪熷疄鎵ц妯″紡"
+        self.log(f"寮€濮嬬矘璐村埌ChatGPT... [{mode_str}]")
+        self.clear_error()
+
+        template_path = self.get_template_path("gpt_input_box.png")
+        if not template_path or not template_path.exists():
+            self.log("绮樿创澶辫触: gpt_input_box.png 妯℃澘涓嶅瓨鍦?)
+            self.set_error("ChatGPT杈撳叆妗嗘ā鏉夸笉瀛樺湪")
+            return False
+
+        result = self.find_template_with_score("gpt_input_box.png")
+        if not result["found"]:
+            self.log(f"绮樿创澶辫触: 鏈壘鍒癈hatGPT杈撳叆妗?(鏈€楂樺垎鏁? {result['score']:.4f})")
+            self.set_error("鏈壘鍒癈hatGPT杈撳叆妗?)
+            return False
+
+        gpt_input_pos = (result["center_x"], result["center_y"])
+        self.log(f"鎵惧埌ChatGPT杈撳叆妗嗭紝浣嶇疆: {gpt_input_pos}锛屽垎鏁? {result['score']:.4f}")
+
+        try:
+            pyautogui.click(gpt_input_pos[0], gpt_input_pos[1])
+            self.log("宸茬偣鍑籆hatGPT杈撳叆妗?)
+        except Exception as e:
+            self.log(f"鐐瑰嚮ChatGPT杈撳叆妗嗗け璐? {str(e)}")
+            self.set_error(f"鐐瑰嚮澶辫触: {str(e)}")
+            return False
+
+        time.sleep(0.3)
+
+        try:
+            if pyperclip:
+                pyautogui.hotkey('ctrl', 'v')
+                self.log("宸蹭娇鐢?Ctrl+V 绮樿创")
+            else:
+                pyautogui.typewrite("")
+                self.log("宸蹭娇鐢?pyautogui.typewrite 绮樿创锛堜笉鏀寔涓枃锛?)
+        except Exception as e:
+            self.log(f"绮樿创澶辫触: {str(e)}")
+            self.set_error(f"绮樿创澶辫触: {str(e)}")
+            return False
+
+        time.sleep(0.2)
+
+        if safe_mode:
+            self.log("鍥炰紶瀹夊叏妯″紡: 璺宠繃鍙戦€侊紙涓嶇偣鍑诲彂閫侊紝涓嶆寜Enter锛?)
+        else:
+            gpt_send_path = self.get_template_path("gpt_send_button.png")
+            if gpt_send_path and gpt_send_path.exists():
+                gpt_send_result = self.find_template_with_score("gpt_send_button.png")
+                if gpt_send_result["found"]:
+                    gpt_send_pos = (gpt_send_result['center_x'], gpt_send_result['center_y'])
+                    self.log(f"鐐瑰嚮ChatGPT鍙戦€佹寜閽紝浣嶇疆: {gpt_send_pos}锛屽垎鏁? {gpt_send_result['score']:.4f}")
+                    self.click_position(gpt_send_pos)
+                else:
+                    self.log("鏈壘鍒癈hatGPT鍙戦€佹寜閽紝浣跨敤 Enter 閿?)
+                    pyautogui.press('enter')
+            else:
+                self.log("ChatGPT鍙戦€佹寜閽ā鏉夸笉瀛樺湪锛屼娇鐢?Enter 閿?)
+                pyautogui.press('enter')
+            self.log("宸插畬鎴愮矘璐村苟鍙戦€?)
+
+        return True
+
+    def copy_and_paste_to_gpt(self):
+        self.log("寮€濮嬪鍒跺苟绮樿创鍒癈hatGPT...")
+
+        if not self.copy_coder_result():
+            self.log("澶嶅埗姝ラ澶辫触锛屽仠姝㈠洖浼?)
+            return False
+
+        time.sleep(0.3)
+
+        if not self.paste_to_gpt():
+            self.log("绮樿创姝ラ澶辫触")
+            return False
+
+        self.log("澶嶅埗骞剁矘璐村埌ChatGPT瀹屾垚")
+        return True
+
+    def execute_command(self, cmd):
+        global stop_current_task
+        stop_current_task = False
+
+        safe_mode = self.safe_mode_checkbox.isChecked()
+        mode_str = "瀹夊叏妯″紡" if safe_mode else "鐪熷疄鎵ц妯″紡"
+        self.current_task_summary = cmd[:50]
+        self.update_task_status_display()
+
+        self.log_signal.emit(f"寮€濮嬫墽琛? {cmd[:80]}... [{mode_str}]")
+        self.status_signal.emit(f"鐘舵€? 鎵ц涓?- {cmd[:30]}...")
+
+        result = self.find_template_with_score("input_box_template.png")
+        if not result["found"]:
+            self.log_signal.emit("閿欒: 鏈壘鍒拌緭鍏ユ锛屾棤娉曟墽琛?)
+            self.set_error("鏈壘鍒拌緭鍏ユ")
+            return
+
+        input_pos = (result["center_x"], result["center_y"])
+        self.log_signal.emit(f"鎵惧埌杈撳叆妗嗭紝浣嶇疆: {input_pos}锛屽垎鏁? {result['score']:.4f}")
+
+        if not self.click_position(input_pos):
+            self.set_error("鐐瑰嚮杈撳叆妗嗗け璐?)
+            return
+
+        time.sleep(0.3)
+
+        clean_text = cmd.replace("<<PROMPT>>", "").replace("<<END>>", "").strip()
+        self.log_signal.emit("姝ラ1: 娓呯悊鎸囦护鏂囨湰")
+
+        self.log_signal.emit("姝ラ2: 澶嶅埗鏂囨湰鍒板壀璐存澘")
+        try:
+            if pyperclip:
+                pyperclip.copy(clean_text)
+                self.log_signal.emit("姝ラ3: 浣跨敤鍓创鏉跨矘璐?(pyperclip)")
+                pyautogui.hotkey('ctrl', 'v')
+            else:
+                self.log_signal.emit("姝ラ3: 浣跨敤 pyautogui 绮樿创 (涓嶆敮鎸佷腑鏂?")
+                pyautogui.typewrite(clean_text)
+        except Exception as e:
+            self.log_signal.emit(f"绮樿创澶辫触: {str(e)}")
+            self.set_error(f"绮樿创澶辫触: {str(e)}")
+            return
+
+        time.sleep(0.2)
+
+        if safe_mode:
+            self.log_signal.emit("姝ラ4: 瀹夊叏妯″紡锛岃烦杩囧彂閫侊紙涓嶇偣鍑诲彂閫侊紝涓嶆寜Enter锛?)
+        else:
+            send_result = self.find_template_with_score("send_button_template.png")
+            if send_result["found"]:
+                self.log_signal.emit(f"姝ラ4: 鐐瑰嚮鍙戦€佹寜閽紝浣嶇疆: ({send_result['center_x']}, {send_result['center_y']})锛屽垎鏁? {send_result['score']:.4f}")
+                self.click_position((send_result['center_x'], send_result['center_y']))
+            else:
+                self.log_signal.emit("姝ラ4: 鏈壘鍒板彂閫佹寜閽紝浣跨敤 Enter 閿?)
+                pyautogui.press('enter')
+            self.log_signal.emit("鎸囦护宸茶緭鍏ュ苟鍙戦€?)
+
+        start_time = time.time()
+        while running and not stop_current_task:
+            self.handle_popup()
+
+            elapsed = time.time() - start_time
+            if elapsed > 60:
+                sandbox_path = self.get_template_path("sandbox_button.png")
+                if sandbox_path and sandbox_path.exists():
+                    self.log_signal.emit("鎵ц瓒呮椂 (60绉?锛屽皾璇曠偣鍑绘矙绠辨寜閽紙妯℃澘鏂瑰紡锛?..")
+                    sandbox_result = self.find_template_with_score("sandbox_button.png")
+                    if sandbox_result["found"]:
+                        self.click_position((sandbox_result['center_x'], sandbox_result['center_y']))
+                        self.log_signal.emit(f"宸茬偣鍑绘矙绠辨寜閽紙妯℃澘鏂瑰紡锛夛紝閲嶆柊寮€濮嬭鏃讹紝鍒嗘暟: {sandbox_result['score']:.4f}")
+                        start_time = time.time()
+                    else:
+                        self.log_signal.emit("妯℃澘鏂瑰紡鏈壘鍒版矙绠辨寜閽紝灏濊瘯鍏抽敭璇嶆柟寮?..")
+                        keywords_str = self.sandbox_keywords_input.text().strip()
+                        if keywords_str:
+                            keywords = [k.strip() for k in keywords_str.split(",") if k.strip()]
+                            button_obj = self.find_button_by_keywords(keywords)
+                            if button_obj:
+                                try:
+                                    button_obj.click()
+                                    self.log_signal.emit("宸茬偣鍑绘矙绠辨寜閽紙鍏抽敭璇嶆柟寮忥級锛岄噸鏂板紑濮嬭鏃?)
+                                    start_time = time.time()
+                                except Exception as e:
+                                    self.log_signal.emit(f"鍏抽敭璇嶆柟寮忕偣鍑绘矙绠辨寜閽け璐? {str(e)}锛岀户缁瓑寰?)
+                                    time.sleep(1)
+                                    start_time = time.time()
+                            else:
+                                self.log_signal.emit("鏈壘鍒板尮閰嶅叧閿瘝鐨勬矙绠辨寜閽紝缁х画绛夊緟")
+                                time.sleep(1)
+                                start_time = time.time()
+                        else:
+                            self.log_signal.emit("娌欑鍏抽敭璇嶄负绌猴紝璺宠繃鍏抽敭璇嶆柟寮?)
+                            time.sleep(1)
+                            start_time = time.time()
+                else:
+                    self.log_signal.emit("瓒呮椂 60绉掞紝娌欑鎸夐挳鏈噰闆嗭紝璺宠繃")
+                    break
+
+            time.sleep(0.5)
+
+        self.log_signal.emit(f"瀹屾垚鎵ц: {cmd[:80]}...")
+        self.status_signal.emit("鐘舵€? 绛夊緟涓?)
+        self.current_task_summary = "鏃?
+        self.update_task_status_display()
+
+    def process_queue(self):
+        global running, pending_execution
+
+        if pending_execution:
+            pending_execution = False
+            return
+
+        idx = 0
+        q = self.get_current_queue()
+        while running:
+            if not q.empty():
+                try:
+                    cmd = q.get_nowait()
+                except:
+                    break
+                execution_status[idx] = 'running'
+                self.queue_update_signal.emit(cmd, "鎵ц涓?)
+                self.update_task_status_display()
+
+                try:
+                    if cmd.startswith("<<PROMPT>>") and cmd.endswith("<<END>>"):
+                        self.execute_command(cmd)
+                    else:
+                        self.log_signal.emit(f"闈炴爣鍑嗘寚浠わ紝璺宠繃: {cmd[:50]}")
+                except Exception as e:
+                    self.log_signal.emit(f"鎵ц寮傚父: {str(e)}")
+                    self.set_error(f"鎵ц寮傚父: {str(e)}")
+
+                execution_status[idx] = 'done'
+                self.queue_update_signal.emit(cmd, "宸插畬鎴?)
+                idx += 1
+                self.update_task_status_display()
+            else:
+                time.sleep(0.1)
+
+        self.log_signal.emit("闃熷垪澶勭悊绾跨▼宸插仠姝?)
+
+    def start_execution(self):
+        global running, pending_execution
+
+        template_path = self.get_template_path("input_box_template.png")
+        if not template_path or not template_path.exists():
+            self.log("閿欒: 璇峰厛閲囬泦缂栫▼宸ュ叿杈撳叆妗嗘ā鏉?(input_box_template.png)")
+            self.set_error("杈撳叆妗嗘ā鏉挎湭閲囬泦")
+            return
+
+        if running:
+            self.log("闃熷垪宸插湪鎵ц涓?)
+            return
+
+        self.log("鎵ц鍓嶅€掕鏃? 3...")
+        self.status_label.setText("鐘舵€? 鍊掕鏃朵腑")
+
+        for i in [3, 2, 1]:
+            if not running:
+                self.log("鍊掕鏃朵腑鏂?)
+                self.status_label.setText("鐘舵€? 宸插仠姝?)
+                pending_execution = True
+                return
+            time.sleep(1)
+            self.log(f"鎵ц鍓嶅€掕鏃? {i}...")
+
+        self.log("鎵ц鍓嶅€掕鏃? 寮€濮嬶紒")
+
+        running = True
+        stop_event.clear()
+        self.thread = threading.Thread(target=self.process_queue)
+        self.thread.start()
+        self.log("闃熷垪鎵ц宸插惎鍔?)
+        self.status_signal.emit("鐘舵€? 鎵ц涓?)
+
+    def execute_single(self):
+        global running, pending_execution
+
+        template_path = self.get_template_path("input_box_template.png")
+        if not template_path or not template_path.exists():
+            self.log("閿欒: 璇峰厛閲囬泦缂栫▼宸ュ叿杈撳叆妗嗘ā鏉?(input_box_template.png)")
+            self.set_error("杈撳叆妗嗘ā鏉挎湭閲囬泦")
+            return
+
+        if running:
+            self.log("闃熷垪宸插湪鎵ц涓?)
+            return
+
+        q = self.get_current_queue()
+        if q.empty():
+            self.log("闃熷垪涓虹┖锛屾棤娉曟墽琛?)
+            return
+
+        self.log("鍙墽琛屼竴鏉℃ā寮?)
+        pending_execution = False
+
+        self.log("鎵ц鍓嶅€掕鏃? 3...")
+        self.status_label.setText("鐘舵€? 鍊掕鏃朵腑")
+
+        for i in [3, 2, 1]:
+            if running:
+                self.log("鍊掕鏃朵腑鏂?)
+                self.status_label.setText("鐘舵€? 宸插仠姝?)
+                return
+            time.sleep(1)
+            self.log(f"鎵ц鍓嶅€掕鏃? {i}...")
+
+        self.log("鎵ц鍓嶅€掕鏃? 寮€濮嬶紒")
+
+        running = True
+        pending_execution = True
+        stop_event.clear()
+
+        def run_single():
+            global running
+            q = self.get_current_queue()
+            if not q.empty():
+                try:
+                    cmd = q.get_nowait()
+                except:
+                    running = False
+                    pending_execution = False
+                    return
+                self.queue_update_signal.emit(cmd, "鎵ц涓?)
+                self.update_task_status_display()
+                try:
+                    self.execute_command(cmd)
+                except Exception as e:
+                    self.log_signal.emit(f"鎵ц寮傚父: {str(e)}")
+                    self.set_error(f"鎵ц寮傚父: {str(e)}")
+                self.queue_update_signal.emit(cmd, "宸插畬鎴?)
+                self.update_task_status_display()
+            running = False
+            pending_execution = False
+            self.log_signal.emit("鍙墽琛屼竴鏉″畬鎴?)
+            self.status_signal.emit("鐘舵€? 绛夊緟涓?)
+
+        self.thread = threading.Thread(target=run_single)
+        self.thread.start()
+        self.log("鍗曟潯鎵ц宸插惎鍔?)
+        self.status_signal.emit("鐘舵€? 鎵ц涓?)
+
+    def stop_execution(self):
+        global running, stop_current_task
+
+        if running:
+            running = False
+            stop_current_task = True
+            self.log("宸茶姹傚仠姝㈠綋鍓嶄换鍔″拰鍚庣画闃熷垪")
+            self.status_signal.emit("鐘舵€? 宸插仠姝?)
+            self.current_task_summary = "宸插仠姝?
+            self.update_task_status_display()
+            self.queue_update_signal.emit("", "宸插仠姝?)
+
+    def confirm_real_execution(self, action):
+        if self.safe_mode_checkbox.isChecked():
+            return True
+
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "鐪熷疄鎵ц纭",
+            f"褰撳墠灏唟action}锛屾槸鍚︾户缁紵",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+
+        if reply == QtWidgets.QMessageBox.Yes:
+            return True
+        else:
+            self.log(f"{action}宸插彇娑?)
+            return False
+
+    def one_click_send_to_coder(self):
+        cmd = self.command_input.toPlainText().strip()
+        if not cmd:
+            self.log("閿欒: 杈撳叆鎸囦护涓虹┖锛岃鍏堣緭鍏ユ彁绀鸿瘝")
+            self.set_error("杈撳叆鎸囦护涓虹┖")
+            return
+
+        profile_dir = profile_manager.get_profile_dir()
+        input_template = profile_dir / "input_box_template.png"
+        if not input_template.exists():
+            self.log("閿欒: 璇峰厛閲囬泦缂栫▼宸ュ叿杈撳叆妗嗘ā鏉?)
+            self.set_error("杈撳叆妗嗘ā鏉挎湭閲囬泦")
+            return
+
+        if not self.confirm_real_execution("鐪熷疄鍙戦€佸唴瀹瑰埌缂栫▼宸ュ叿"):
+            return
+
+        wrapped_cmd = self.auto_wrap(cmd)
+        self.get_current_queue().put(wrapped_cmd)
+
+        display_text = wrapped_cmd[:80] + "..." if len(wrapped_cmd) > 80 else wrapped_cmd
+        self.queue_view.addItem(f"[寰呮墽琛宂 {display_text}")
+        self.log(f"宸插姞鍏ラ槦鍒? {display_text}")
+
+        if self.safe_mode_checkbox.isChecked():
+            self.log("瀹夊叏妯″紡: 鍙矘璐达紝涓嶅彂閫?)
+            self.log("璇锋墜鍔ㄦ鏌ョ矘璐村唴瀹?)
+        else:
+            self.log("鐪熷疄鎵ц妯″紡: 鍑嗗鍙戦€?)
+            self.start_execution()
+
+        self.update_task_status_display()
+
+    def one_click_return_to_gpt(self):
+        profile_dir = profile_manager.get_profile_dir()
+        coder_copy_template = profile_dir / "coder_copy_button.png"
+        gpt_input_template = profile_dir / "gpt_input_box.png"
+
+        missing_templates = []
+        if not coder_copy_template.exists():
+            missing_templates.append("缂栫▼宸ュ叿澶嶅埗鎸夐挳")
+        if not gpt_input_template.exists():
+            missing_templates.append("ChatGPT 杈撳叆妗?)
+
+        if missing_templates:
+            self.log(f"閿欒: 缂哄皯妯℃澘: {', '.join(missing_templates)}")
+            self.set_error(f"缂哄皯妯℃澘: {', '.join(missing_templates)}")
+            return
+
+        if not self.confirm_real_execution("鍥炰紶缁撴灉鍒?ChatGPT"):
+            return
+
+        self.copy_and_paste_to_gpt()
+
+    def one_click_safety_drill(self):
+        self.log("寮€濮嬩竴閿畨鍏ㄦ紨缁?..")
+        self.clear_error()
+
+        profile_dir = profile_manager.get_profile_dir()
+        key_templates = [
+            ("input_box_template.png", "缂栫▼宸ュ叿杈撳叆妗?),
+            ("coder_copy_button.png", "缂栫▼宸ュ叿澶嶅埗鎸夐挳"),
+            ("gpt_input_box.png", "ChatGPT 杈撳叆妗?)
+        ]
+
+        missing_templates = []
+        for template_name, template_desc in key_templates:
+            template_path = profile_dir / template_name
+            if not template_path.exists():
+                missing_templates.append(template_desc)
+
+        if missing_templates:
+            self.log(f"婕旂粌澶辫触: 缂哄皯鍏抽敭妯℃澘: {', '.join(missing_templates)}")
+            self.set_error(f"缂哄皯妯℃澘: {', '.join(missing_templates)}")
+            return
+
+        self.log("姝ラ1: 娴嬭瘯璇嗗埆缂栫▼宸ュ叿杈撳叆妗?)
+        self.test_template("input")
+
+        self.log("姝ラ2: 娴嬭瘯璇嗗埆缂栫▼宸ュ叿澶嶅埗鎸夐挳")
+        self.test_template("coder_copy")
+
+        self.log("姝ラ3: 娴嬭瘯璇嗗埆 ChatGPT 杈撳叆妗?)
+        self.test_template("gpt_input")
+
+        self.log("姝ラ4: 鎵ц瀹夊叏娴嬭瘯绮樿创")
+        self.safe_test_paste()
+
+        self.log("瀹夊叏婕旂粌瀹屾垚锛?)
+        self.log("- 宸叉祴璇曟ā鏉胯瘑鍒?)
+        self.log("- 宸叉墽琛屽畨鍏ㄧ矘璐?)
+        self.log("- 鏈墽琛屼换浣曞嵄闄╂搷浣?)
+
+    def reset_workflow(self):
+        self.log("寮€濮嬮噸缃綋鍓嶆祦绋?..")
+
+        if running:
+            self.stop_execution()
+
+        self.clear_queue()
+        self.current_task_summary = "鏃?
+        self.clear_error()
+
+        self.log("褰撳墠娴佺▼宸查噸缃?)
+        self.update_task_status_display()
+
+    def open_readme(self):
+        try:
+            readme_path = BASE_DIR / "README_L宸ュ叿浣跨敤璇存槑.txt"
+            if readme_path.exists():
+                os.startfile(str(readme_path))
+                self.log(f"宸叉墦寮€浣跨敤璇存槑: {readme_path}")
+            else:
+                self.log("浣跨敤璇存槑鏂囦欢涓嶅瓨鍦?)
+                self.set_error("浣跨敤璇存槑鏂囦欢涓嶅瓨鍦?)
+        except Exception as e:
+            self.log(f"鎵撳紑浣跨敤璇存槑澶辫触: {str(e)}")
+            self.set_error(f"鎵撳紑浣跨敤璇存槑澶辫触: {str(e)}")
+
+    def open_program_directory(self):
+        try:
+            os.startfile(str(BASE_DIR))
+            self.log(f"宸叉墦寮€绋嬪簭鐩綍: {BASE_DIR}")
+        except Exception as e:
+            self.log(f"鎵撳紑绋嬪簭鐩綍澶辫触: {str(e)}")
+            self.set_error(f"鎵撳紑绋嬪簭鐩綍澶辫触: {str(e)}")
+
+    def run_system_check(self):
+        self.log("=====================================")
+        self.log("寮€濮嬬郴缁熻嚜妫€...")
+        self.log("=====================================")
+        
+        checks = []
+        issues = []
+        self.diagnostic_data = []
+        
+        # 妫€鏌?Python 鐗堟湰
+        try:
+            import sys
+            python_version = f"Python {sys.version}"
+            self.log(f"鉁?Python 鐗堟湰: {python_version}")
+            self.diagnostic_data.append(f"Python 鐗堟湰: {python_version}")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?Python 鐗堟湰妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"Python 鐗堟湰: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("Python 鐗堟湰妫€鏌ュけ璐?)
+            checks.append(False)
+        
+        # 妫€鏌ュ綋鍓嶇▼搴忕洰褰?
+        try:
+            program_dir = str(BASE_DIR)
+            self.log(f"鉁?褰撳墠绋嬪簭鐩綍: {program_dir}")
+            self.diagnostic_data.append(f"褰撳墠绋嬪簭鐩綍: {program_dir}")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?褰撳墠绋嬪簭鐩綍妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"褰撳墠绋嬪簭鐩綍: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("褰撳墠绋嬪簭鐩綍妫€鏌ュけ璐?)
+            checks.append(False)
+        
+        # 妫€鏌ュ綋鍓嶉厤缃?
+        try:
+            profile_name = profile_manager.current_profile
+            self.log(f"鉁?褰撳墠閰嶇疆鍚嶇О: {profile_name}")
+            self.diagnostic_data.append(f"褰撳墠閰嶇疆鍚嶇О: {profile_name}")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?褰撳墠閰嶇疆妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"褰撳墠閰嶇疆鍚嶇О: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("褰撳墠閰嶇疆妫€鏌ュけ璐?)
+            checks.append(False)
+        
+        # 妫€鏌ラ厤缃洰褰?
+        try:
+            profile_dir = profile_manager.get_profile_dir()
+            if profile_dir:
+                self.log(f"鉁?褰撳墠閰嶇疆妯℃澘鐩綍: {profile_dir}")
+                self.diagnostic_data.append(f"褰撳墠閰嶇疆妯℃澘鐩綍: {profile_dir}")
+            else:
+                self.log("鉁?褰撳墠閰嶇疆妯℃澘鐩綍: 鏈壘鍒?)
+                self.diagnostic_data.append("褰撳墠閰嶇疆妯℃澘鐩綍: 鏈壘鍒?)
+                issues.append("褰撳墠閰嶇疆妯℃澘鐩綍鏈壘鍒?)
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?褰撳墠閰嶇疆妯℃澘鐩綍妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"褰撳墠閰嶇疆妯℃澘鐩綍: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("褰撳墠閰嶇疆妯℃澘鐩綍妫€鏌ュけ璐?)
+            checks.append(False)
+        
+        # 妫€鏌?profiles 鐩綍
+        try:
+            if PROFILES_DIR.exists():
+                self.log(f"鉁?profiles 鐩綍: 瀛樺湪 ({PROFILES_DIR})")
+                self.diagnostic_data.append(f"profiles 鐩綍: 瀛樺湪 ({PROFILES_DIR})")
+            else:
+                self.log(f"鉁?profiles 鐩綍: 涓嶅瓨鍦?({PROFILES_DIR})")
+                self.diagnostic_data.append(f"profiles 鐩綍: 涓嶅瓨鍦?({PROFILES_DIR})")
+                issues.append("profiles 鐩綍涓嶅瓨鍦?)
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?profiles 鐩綍妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"profiles 鐩綍: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("profiles 鐩綍妫€鏌ュけ璐?)
+            checks.append(False)
+        
+        # 妫€鏌?config.json
+        try:
+            config_path = profile_manager.get_config_path()
+            if config_path:
+                if config_path.exists():
+                    self.log(f"鉁?config.json: 瀛樺湪 ({config_path})")
+                    # 娴嬭瘯璇诲啓
+                    try:
+                        with open(config_path, 'r', encoding='utf-8') as f:
+                            data = json.load(f)
+                        self.log("鉁?config.json: 鍙")
+                        # 娴嬭瘯鍐欏叆
+                        try:
+                            with open(config_path, 'w', encoding='utf-8') as f:
+                                json.dump(data, f, ensure_ascii=False, indent=2)
+                            self.log("鉁?config.json: 鍙啓")
+                            self.diagnostic_data.append(f"config.json: 瀛樺湪涓斿彲璇诲啓 ({config_path})")
+                        except Exception as e:
+                            self.log(f"鉁?config.json: 鍙啓娴嬭瘯澶辫触: {str(e)}")
+                            self.diagnostic_data.append(f"config.json: 鍙浣嗕笉鍙啓 - {str(e)}")
+                            issues.append("config.json 涓嶅彲鍐?)
+                    except Exception as e:
+                        self.log(f"鉁?config.json: 鍙娴嬭瘯澶辫触: {str(e)}")
+                        self.diagnostic_data.append(f"config.json: 瀛樺湪浣嗕笉鍙 - {str(e)}")
+                        issues.append("config.json 涓嶅彲璇?)
+                else:
+                    self.log(f"鉁?config.json: 涓嶅瓨鍦?({config_path})")
+                    self.diagnostic_data.append(f"config.json: 涓嶅瓨鍦?({config_path})")
+                    issues.append("config.json 涓嶅瓨鍦?)
+            else:
+                self.log("鉁?config.json: 鏃犳硶鑾峰彇璺緞")
+                self.diagnostic_data.append("config.json: 鏃犳硶鑾峰彇璺緞")
+                issues.append("config.json 璺緞鑾峰彇澶辫触")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?config.json 妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"config.json: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("config.json 妫€鏌ュけ璐?)
+            checks.append(False)
+        
+        # 妫€鏌ヤ緷璧?
+        dependencies = [
+            ('PyQt5', 'from PyQt5 import QtWidgets'),
+            ('pyautogui', 'import pyautogui'),
+            ('OpenCV', 'import cv2'),
+            ('numpy', 'import numpy'),
+            ('pyperclip', 'import pyperclip'),
+            ('pywinauto', 'from pywinauto import Desktop'),
+            ('mss', 'from mss import mss'),
+            ('Pillow', 'from PIL import Image')
+        ]
+        
+        for name, import_stmt in dependencies:
+            try:
+                exec(import_stmt)
+                self.log(f"鉁?{name}: 鍙敤")
+                self.diagnostic_data.append(f"{name}: 鍙敤")
+                checks.append(True)
+            except Exception as e:
+                self.log(f"鉁?{name}: 涓嶅彲鐢?- {str(e)}")
+                self.diagnostic_data.append(f"{name}: 涓嶅彲鐢?- {str(e)}")
+                issues.append(f"{name} 涓嶅彲鐢?)
+                checks.append(False)
+        
+        # 妫€鏌ユ埅鍥捐兘鍔涳紙mss > ImageGrab > pyautogui锛?
+        try:
+            self.log(f"鉁?鎴浘鍚庣鍙敤鎬? mss={'鍙敤' if MSS_AVAILABLE else '涓嶅彲鐢?}; ImageGrab={'鍙敤' if (PIL_AVAILABLE and ImageGrab is not None) else '涓嶅彲鐢?}")
+            self.diagnostic_data.append(f"鎴浘鍚庣鍙敤鎬? mss={'鍙敤' if MSS_AVAILABLE else '涓嶅彲鐢?}; ImageGrab={'鍙敤' if (PIL_AVAILABLE and ImageGrab is not None) else '涓嶅彲鐢?}")
+
+            screenshot_pil = capture_screen_pil(log_fn=self.log)
+            if screenshot_pil is None:
+                raise RuntimeError("capture_screen_pil 杩斿洖 None")
+            self.log(f"鉁?灞忓箷鎴浘: 鎴愬姛 ({screenshot_pil.size}) 浣跨敤鍚庣: {LAST_SCREENSHOT_BACKEND}")
+            self.diagnostic_data.append(f"灞忓箷鎴浘: 鎴愬姛 ({screenshot_pil.size}) 浣跨敤鍚庣: {LAST_SCREENSHOT_BACKEND}")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?灞忓箷鎴浘: 澶辫触 - {str(e)} (鍚庣: {LAST_SCREENSHOT_BACKEND})")
+            self.diagnostic_data.append(f"灞忓箷鎴浘: 澶辫触 - {str(e)} (鍚庣: {LAST_SCREENSHOT_BACKEND})")
+            issues.append("灞忓箷鎴浘澶辫触")
+            checks.append(False)
+        
+        # 妫€鏌ュ壀璐存澘
+        try:
+            test_text = "L宸ュ叿鍓创鏉挎祴璇?
+            pyperclip.copy(test_text)
+            clipboard_content = pyperclip.paste()
+            if clipboard_content == test_text:
+                self.log("鉁?鍓创鏉? 鍙鍐?)
+                self.diagnostic_data.append("鍓创鏉? 鍙鍐?)
+            else:
+                self.log(f"鉁?鍓创鏉? 鍐呭涓嶅尮閰?- 鏈熸湜: '{test_text}', 瀹為檯: '{clipboard_content}'")
+                self.diagnostic_data.append(f"鍓创鏉? 鍐呭涓嶅尮閰?)
+                issues.append("鍓创鏉垮唴瀹逛笉鍖归厤")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?鍓创鏉? 娴嬭瘯澶辫触 - {str(e)}")
+            self.diagnostic_data.append(f"鍓创鏉? 娴嬭瘯澶辫触 - {str(e)}")
+            issues.append("鍓创鏉挎祴璇曞け璐?)
+            checks.append(False)
+        
+        # 妫€鏌ユā鏉胯鍙栬兘鍔?
+        templates = [
+            "input_box_template.png",
+            "send_button_template.png",
+            "delete_popup.png",
+            "sandbox_button.png",
+            "coder_copy_button.png",
+            "gpt_input_box.png",
+            "gpt_send_button.png"
+        ]
+
+        template_status = []
+        for template in templates:
+            try:
+                template_path = profile_manager.get_template_path(template)
+                if template_path and template_path.exists():
+                    file_size = template_path.stat().st_size
+                    test_img = read_cv_image_unicode(template_path)
+                    if test_img is not None:
+                        h, w = test_img.shape[:2]
+                        self.log(f"鉁?妯℃澘 {template}: 宸查噰闆嗭紝鏂囦欢澶у皬: {file_size} bytes锛岃鍙栧昂瀵? {w}x{h}")
+                        template_status.append(f"{template}: 宸查噰闆嗭紝璇诲彇灏哄: {w}x{h}")
+                    else:
+                        self.log(f"鉁?妯℃澘 {template}: 鏂囦欢瀛樺湪浣嗚鍙栧け璐ワ紝鍙兘鏄腑鏂囪矾寰勬垨鍥剧墖鎹熷潖: {template_path}")
+                        template_status.append(f"{template}: 鏂囦欢瀛樺湪浣嗚鍙栧け璐?)
+                        issues.append(f"妯℃澘 {template} 瀛樺湪浣嗚鍙栧け璐?)
+                else:
+                    self.log(f"鉁?妯℃澘 {template}: 鏈噰闆?)
+                    template_status.append(f"{template}: 鏈噰闆?)
+                    issues.append(f"妯℃澘 {template} 鏈噰闆?)
+            except Exception as e:
+                self.log(f"鉁?妯℃澘 {template}: 妫€鏌ュけ璐?- {str(e)}")
+                template_status.append(f"{template}: 妫€鏌ュけ璐?- {str(e)}")
+                issues.append(f"妯℃澘 {template} 妫€鏌ュけ璐?)
+        self.diagnostic_data.extend(template_status)
+        checks.append(True)
+        
+        # 妫€鏌ラ槦鍒?
+        try:
+            queue_size = self.get_current_queue().qsize()
+            self.log(f"鉁?褰撳墠闃熷垪鏁伴噺: {queue_size}")
+            self.diagnostic_data.append(f"褰撳墠闃熷垪鏁伴噺: {queue_size}")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?闃熷垪妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"褰撳墠闃熷垪鏁伴噺: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("闃熷垪妫€鏌ュけ璐?)
+            checks.append(False)
+        
+        # 妫€鏌ュ畨鍏ㄦā寮?
+        try:
+            safe_mode = self.safe_mode_checkbox.isChecked()
+            gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+            self.log(f"鉁?瀹夊叏妯″紡: {'寮€鍚? if safe_mode else '鍏抽棴'}")
+            self.log(f"鉁?鍥炰紶瀹夊叏妯″紡: {'寮€鍚? if gpt_safe_mode else '鍏抽棴'}")
+            self.diagnostic_data.append(f"瀹夊叏妯″紡: {'寮€鍚? if safe_mode else '鍏抽棴'}")
+            self.diagnostic_data.append(f"鍥炰紶瀹夊叏妯″紡: {'寮€鍚? if gpt_safe_mode else '鍏抽棴'}")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?瀹夊叏妯″紡妫€鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"瀹夊叏妯″紡: 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("瀹夊叏妯″紡妫€鏌ュけ璐?)
+            checks.append(False)
+
+        # 妫€鏌ュ叧閿瘝璁剧疆
+        try:
+            delete_keywords = self.delete_keywords_input.text().strip()
+            sandbox_keywords = self.sandbox_keywords_input.text().strip()
+            self.log(f"鉁?鍒犻櫎/纭鍏抽敭璇? {delete_keywords}")
+            self.log(f"鉁?鍚庡彴娌欑鍏抽敭璇? {sandbox_keywords}")
+            self.diagnostic_data.append(f"鍒犻櫎/纭鍏抽敭璇? {delete_keywords}")
+            self.diagnostic_data.append(f"鍚庡彴娌欑鍏抽敭璇? {sandbox_keywords}")
+            checks.append(True)
+        except Exception as e:
+            self.log(f"鉁?鍏抽敭璇嶈缃鏌ュけ璐? {str(e)}")
+            self.diagnostic_data.append(f"鍏抽敭璇嶈缃? 妫€鏌ュけ璐?- {str(e)}")
+            issues.append("鍏抽敭璇嶈缃鏌ュけ璐?)
+            checks.append(False)
+
+        # 姹囨€?
+        self.log("=====================================")
+        if issues:
+            self.log(f"绯荤粺鑷鍙戠幇 {len(issues)} 涓棶棰?")
+            for issue in issues:
+                self.log(f"  - {issue}")
+            self.log("绯荤粺鑷鍙戠幇闂锛岃鏌ョ湅涓婃柟璇︾粏鏃ュ織")
+            self.set_error(f"绯荤粺鑷鍙戠幇 {len(issues)} 涓棶棰?)
+        else:
+            self.log("绯荤粺鑷閫氳繃锛屽彲浠ュ紑濮嬩娇鐢?)
+            self.clear_error()
+        self.log("=====================================")
+
+    def save_diagnostic_report(self):
+        if not hasattr(self, 'diagnostic_data') or not self.diagnostic_data:
+            self.log("閿欒: 璇峰厛鎵ц绯荤粺鑷")
+            self.set_error("璇峰厛鎵ц绯荤粺鑷")
+            return
+        
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            report_filename = f"L璇婃柇鎶ュ憡_{timestamp}.txt"
+            report_path = BASE_DIR / report_filename
+            
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("L 妗ユ宸ュ叿 - 璇婃柇鎶ュ憡\n")
+                f.write("=====================================\n")
+                f.write(f"鐢熸垚鏃堕棿: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"L 宸ュ叿鐗堟湰: {APP_VERSION}\n")
+                f.write("=====================================\n\n")
+                
+                for item in self.diagnostic_data:
+                    f.write(f"{item}\n")
+                
+                f.write("\n=====================================\n")
+                f.write("璇婃柇鎶ュ憡宸蹭繚瀛榎n")
+            
+            self.log(f"宸蹭繚瀛樿瘖鏂姤鍛? {report_path}")
+            
+            # 灏濊瘯鎵撳紑鐩綍
+            try:
+                os.startfile(str(BASE_DIR))
+                self.log(f"宸叉墦寮€鎶ュ憡鎵€鍦ㄧ洰褰? {BASE_DIR}")
+            except Exception as e:
+                self.log(f"鏃犳硶鎵撳紑鐩綍: {str(e)}")
+                
+        except Exception as e:
+            self.log(f"淇濆瓨璇婃柇鎶ュ憡澶辫触: {str(e)}")
+            self.set_error(f"淇濆瓨璇婃柇鎶ュ憡澶辫触: {str(e)}")
+
+    def create_version_backup(self):
+        try:
+            timestamp = time.strftime("%Y%m%d_%H%M%S")
+            backup_dir = BASE_DIR / "backups"
+            
+            if not backup_dir.exists():
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                self.log(f"宸插垱寤哄浠界洰褰? {backup_dir}")
+            
+            backup_filename = f"l_bridge_tool_gui_{timestamp}.py"
+            backup_path = backup_dir / backup_filename
+            
+            source_path = Path("c:/Users/Lu/Desktop/鏂板缓鏂囦欢澶?(5)/l_bridge_tool_gui.py")
+            
+            import shutil
+            shutil.copy2(source_path, backup_path)
+            
+            self.log(f"宸插垱寤虹増鏈浠? {backup_path}")
+            
+            try:
+                os.startfile(str(backup_dir))
+                self.log(f"宸叉墦寮€澶囦唤鐩綍: {backup_dir}")
+            except Exception as e:
+                self.log(f"鏃犳硶鎵撳紑澶囦唤鐩綍: {str(e)}")
+                
+        except Exception as e:
+            self.log(f"鍒涘缓鐗堟湰澶囦唤澶辫触: {str(e)}")
+            self.set_error(f"鍒涘缓鐗堟湰澶囦唤澶辫触: {str(e)}")
+
+    def init_ui_scale(self):
+        try:
+            config = profile_manager.load_profile_config(profile_manager.current_profile)
+            self.ui_scale = config.get("ui_scale", "medium")
+            self.apply_ui_scale()
+        except Exception as e:
+            self.ui_scale = "medium"
+            self.apply_ui_scale()
+
+    def set_ui_scale(self, scale):
+        try:
+            self.ui_scale = scale
+            self.apply_ui_scale()
+            config = profile_manager.load_profile_config(profile_manager.current_profile)
+            config["ui_scale"] = scale
+            config_path = profile_manager.get_config_path(profile_manager.current_profile)
+            if config_path:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, ensure_ascii=False, indent=2)
+            self.log(f"鐣岄潰缂╂斁宸插垏鎹负: {scale}")
+        except Exception as e:
+            self.log(f"鍒囨崲缂╂斁澶辫触: {str(e)}")
+
+    def apply_ui_scale(self):
+        scale_fonts = {
+            "small": {"general": 10, "log": 10, "input": 11, "button": 10},
+            "medium": {"general": 12, "log": 12, "input": 13, "button": 12},
+            "large": {"general": 14, "log": 13, "input": 14, "button": 13}
+        }
+        fonts = scale_fonts.get(self.ui_scale, scale_fonts["large"])
+
+        general_font = QtGui.QFont("寰蒋闆呴粦", fonts["general"])
+        log_font = QtGui.QFont("Consolas", fonts["log"])
+        input_font = QtGui.QFont("寰蒋闆呴粦", fonts["input"])
+        button_font = QtGui.QFont("寰蒋闆呴粦", fonts["button"])
+
+        QtWidgets.QApplication.instance().setFont(general_font)
+
+        if hasattr(self, 'log_view'):
+            self.log_view.setFont(log_font)
+        if hasattr(self, 'queue_view'):
+            self.queue_view.setFont(general_font)
+        if hasattr(self, 'instruction_input'):
+            self.instruction_input.setFont(input_font)
+        if hasattr(self, 'next_step_label'):
+            self.next_step_label.setFont(general_font)
+
+        for widget in QtWidgets.QApplication.instance().allWidgets():
+            if isinstance(widget, QtWidgets.QPushButton):
+                widget.setFont(button_font)
+                if "鍙戦€? in widget.text() or "鎵ц" in widget.text() or "婕旂粌" in widget.text():
+                    widget.setMinimumHeight(38)
+                else:
+                    widget.setMinimumHeight(34)
+
+        self.update_zoom_button_styles()
+
+    def update_zoom_button_styles(self):
+        styles = {
+            "small": """
+                QPushButton { background-color: #e0e0e0; border: 1px solid #999; padding: 4px 8px; }
+                QPushButton:pressed { background-color: #c0c0c0; }
+            """,
+            "medium": """
+                QPushButton { background-color: #d0d0d0; border: 1px solid #888; padding: 5px 10px; }
+                QPushButton:pressed { background-color: #b0b0b0; }
+            """,
+            "large": """
+                QPushButton { background-color: #3498db; color: white; border: 2px solid #2980b9; padding: 6px 12px; font-weight: bold; }
+                QPushButton:pressed { background-color: #2980b9; }
+            """
+        }
+        style = styles.get(self.ui_scale, styles["large"])
+        self.zoom_small_btn.setStyleSheet(style if self.ui_scale == "small" else "")
+        self.zoom_medium_btn.setStyleSheet(style if self.ui_scale == "medium" else "")
+        self.zoom_large_btn.setStyleSheet(style if self.ui_scale == "large" else "")
+
+    def wizard_init(self):
+        try:
+            config = profile_manager.load_profile_config(profile_manager.current_profile)
+            self.鍚戝_step = config.get("wizard_step", 1)
+            self.鍚戝_skipped = config.get("wizard_skipped", False)
+            self.鍚戝_safety_drill_done = config.get("wizard_safety_drill_done", False)
+            self.wizard_update_display()
+            self.update_next_step_hint()
+        except Exception as e:
+            self.log(f"鍚戝鍒濆鍖栧け璐? {str(e)}")
+            self.鍚戝_step = 1
+            self.鍚戝_skipped = False
+            self.鍚戝_safety_drill_done = False
+
+    def wizard_steps(self):
+        return [
+            {
+                "step": 1,
+                "title": "閫夋嫨椤圭洰閰嶇疆",
+                "description": "璇风‘璁ゅ綋鍓嶉」鐩厤缃紝鎴栧垱寤烘柊閰嶇疆",
+                "required": True,
+                "completed": True  # 鎬绘槸瀹屾垚锛屽洜涓洪厤缃€绘槸瀛樺湪
+            },
+            {
+                "step": 2,
+                "title": "閲囬泦缂栫▼宸ュ叿杈撳叆妗?,
+                "description": "璇风偣鍑?鎵ц褰撳墠姝ラ'锛岀劧鍚庨€夋嫨缂栫▼宸ュ叿鐨勮緭鍏ユ",
+                "required": True,
+                "template": "input_box_template.png"
+            },
+            {
+                "step": 3,
+                "title": "閲囬泦鍙戦€佹寜閽?,
+                "description": "璇风偣鍑?鎵ц褰撳墠姝ラ'锛岀劧鍚庨€夋嫨缂栫▼宸ュ叿鐨勫彂閫佹寜閽紙鍙烦杩囷級",
+                "required": False,
+                "template": "send_button_template.png"
+            },
+            {
+                "step": 4,
+                "title": "閲囬泦缂栫▼宸ュ叿澶嶅埗缁撴灉鎸夐挳",
+                "description": "璇风偣鍑?鎵ц褰撳墠姝ラ'锛岀劧鍚庨€夋嫨缂栫▼宸ュ叿鐨勫鍒剁粨鏋滄寜閽?,
+                "required": True,
+                "template": "coder_copy_button.png"
+            },
+            {
+                "step": 5,
+                "title": "閲囬泦 ChatGPT 杈撳叆妗?,
+                "description": "璇风偣鍑?鎵ц褰撳墠姝ラ'锛岀劧鍚庨€夋嫨 ChatGPT 鐨勮緭鍏ユ",
+                "required": True,
+                "template": "gpt_input_box.png"
+            },
+            {
+                "step": 6,
+                "title": "閲囬泦 ChatGPT 鍙戦€佹寜閽?,
+                "description": "璇风偣鍑?鎵ц褰撳墠姝ラ'锛岀劧鍚庨€夋嫨 ChatGPT 鐨勫彂閫佹寜閽紙鍙烦杩囷級",
+                "required": False,
+                "template": "gpt_send_button.png"
+            },
+            {
+                "step": 7,
+                "title": "鎵ц瀹夊叏婕旂粌",
+                "description": "璇风偣鍑?鎵ц褰撳墠姝ラ'锛岀郴缁熷皢鑷姩娴嬭瘯鎵€鏈夋ā鏉?,
+                "required": True,
+                "safety_drill": True
+            },
+            {
+                "step": 8,
+                "title": "瀹屾垚",
+                "description": "鍚戝宸插畬鎴愶紒鐜板湪鍙互杈撳叆鎻愮ず璇嶅苟鐐瑰嚮涓€閿彂閫佸埌缂栫▼宸ュ叿",
+                "required": True,
+                "completed": True  # 鏈€鍚庝竴姝ユ€绘槸瀹屾垚
+            }
+        ]
+
+    def wizard_update_display(self):
+        try:
+            steps = self.wizard_steps()
+            if 1 <= self.鍚戝_step <= len(steps):
+                step_info = steps[self.鍚戝_step - 1]
+                self.鍚戝_step_label.setText(f"褰撳墠姝ラ: {self.鍚戝_step}/{len(steps)} - {step_info['title']}")
+                status = "宸插畬鎴? if self.wizard_step_completed(step_info) else "鏈畬鎴?
+                required = "蹇呴』瀹屾垚" if step_info['required'] else "鍙烦杩?
+                self.鍚戝_desc_label.setText(f"{step_info['description']}\n鐘舵€? {status} | {required}")
+            else:
+                self.鍚戝_step_label.setText("鍚戝宸插畬鎴?)
+                self.鍚戝_desc_label.setText("鎮ㄥ凡缁忓畬鎴愪簡鎵€鏈夊悜瀵兼楠?)
+        except Exception as e:
+            self.log(f"鍚戝鏇存柊鏄剧ず澶辫触: {str(e)}")
+
+    def wizard_step_completed(self, step_info):
+        try:
+            if 'completed' in step_info and step_info['completed']:
+                return True
+            if 'template' in step_info:
+                template_path = profile_manager.get_template_path(step_info['template'])
+                return template_path and template_path.exists()
+            if 'safety_drill' in step_info:
+                return self.鍚戝_safety_drill_done
+            return False
+        except Exception:
+            return False
+
+    def wizard_prev(self):
+        try:
+            steps = self.wizard_steps()
+            if self.鍚戝_step > 1:
+                self.鍚戝_step -= 1
+                self.wizard_update_display()
+                self.update_next_step_hint()
+                self.log(f"鍚戝姝ラ: {self.鍚戝_step}")
+        except Exception as e:
+            self.log(f"鍚戝涓婁竴姝ュけ璐? {str(e)}")
+
+    def wizard_next(self):
+        try:
+            steps = self.wizard_steps()
+            if self.鍚戝_step < len(steps):
+                current_step = steps[self.鍚戝_step - 1]
+                if current_step['required'] and not self.wizard_step_completed(current_step):
+                    self.log(f"閿欒: 绗?{self.鍚戝_step} 姝ユ槸蹇呴』瀹屾垚鐨?)
+                    self.set_error(f"璇峰厛瀹屾垚褰撳墠姝ラ")
+                    return
+                self.鍚戝_step += 1
+                self.wizard_update_display()
+                self.update_next_step_hint()
+                self.wizard_save_status()
+                self.log(f"鍚戝姝ラ: {self.鍚戝_step}")
+        except Exception as e:
+            self.log(f"鍚戝涓嬩竴姝ュけ璐? {str(e)}")
+
+    def wizard_execute(self):
+        try:
+            steps = self.wizard_steps()
+            if 1 <= self.鍚戝_step <= len(steps):
+                step_info = steps[self.鍚戝_step - 1]
+                
+                if self.wizard_step_completed(step_info):
+                    self.log(f"绗?{self.鍚戝_step} 姝ュ凡缁忓畬鎴?)
+                    self.wizard_next()
+                    return
+                
+                if 'template' in step_info:
+                    template_name = step_info['template']
+                    self.log(f"寮€濮嬮噰闆嗘ā鏉? {template_name}")
+                    # 璋冪敤鐜版湁鐨勬ā鏉块噰闆嗛€昏緫
+                    if template_name == "input_box_template.png":
+                        self.capture_input_box_template()
+                    elif template_name == "send_button_template.png":
+                        self.capture_send_button_template()
+                    elif template_name == "coder_copy_button.png":
+                        self.capture_coder_copy_button_template()
+                    elif template_name == "gpt_input_box.png":
+                        self.capture_gpt_input_box_template()
+                    elif template_name == "gpt_send_button.png":
+                        self.capture_gpt_send_button_template()
+                    
+                    # 妫€鏌ユ槸鍚﹀畬鎴?
+                    if self.wizard_step_completed(step_info):
+                        self.log(f"妯℃澘閲囬泦鎴愬姛: {template_name}")
+                        self.wizard_next()
+                    else:
+                        self.log(f"妯℃澘閲囬泦澶辫触: {template_name}")
+                
+                elif 'safety_drill' in step_info:
+                    self.log("寮€濮嬫墽琛屽畨鍏ㄦ紨缁?)
+                    self.one_click_safety_drill()
+                    self.鍚戝_safety_drill_done = True
+                    self.wizard_save_status()
+                    self.wizard_next()
+        except Exception as e:
+            self.log(f"鍚戝鎵ц褰撳墠姝ラ澶辫触: {str(e)}")
+            self.set_error(f"鎵ц姝ラ澶辫触: {str(e)}")
+
+    def wizard_skip(self):
+        try:
+            self.鍚戝_skipped = True
+            self.wizard_save_status()
+            self.鍚戝_step = len(self.wizard_steps())
+            self.wizard_update_display()
+            self.update_next_step_hint()
+            self.log("鍚戝宸茶烦杩?)
+        except Exception as e:
+            self.log(f"鍚戝璺宠繃澶辫触: {str(e)}")
+
+    def wizard_save_status(self):
+        try:
+            profile_manager.save_profile_config(
+                delete_keywords=self.delete_keywords_input.text().strip(),
+                sandbox_keywords=self.sandbox_keywords_input.text().strip()
+            )
+            # 棰濆淇濆瓨鍚戝鐘舵€?
+            config_path = profile_manager.get_config_path()
+            if config_path:
+                config = profile_manager.load_profile_config(profile_manager.current_profile)
+                config["wizard_step"] = self.鍚戝_step
+                config["wizard_skipped"] = self.鍚戝_skipped
+                config["wizard_safety_drill_done"] = self.鍚戝_safety_drill_done
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            self.log(f"鍚戝淇濆瓨鐘舵€佸け璐? {str(e)}")
+
+    def capture_input_box_template(self):
+        try:
+            self.capture_template("input_box_template.png", "璇烽€夋嫨缂栫▼宸ュ叿鐨勮緭鍏ユ")
+        except Exception as e:
+            self.log(f"閲囬泦杈撳叆妗嗘ā鏉垮け璐? {str(e)}")
+
+    def capture_send_button_template(self):
+        try:
+            self.capture_template("send_button_template.png", "璇烽€夋嫨缂栫▼宸ュ叿鐨勫彂閫佹寜閽?)
+        except Exception as e:
+            self.log(f"閲囬泦鍙戦€佹寜閽ā鏉垮け璐? {str(e)}")
+
+    def capture_coder_copy_button_template(self):
+        try:
+            self.capture_template("coder_copy_button.png", "璇烽€夋嫨缂栫▼宸ュ叿鐨勫鍒剁粨鏋滄寜閽?)
+        except Exception as e:
+            self.log(f"閲囬泦缂栫▼澶嶅埗鎸夐挳妯℃澘澶辫触: {str(e)}")
+
+    def capture_gpt_input_box_template(self):
+        try:
+            self.capture_template("gpt_input_box.png", "璇烽€夋嫨 ChatGPT 鐨勮緭鍏ユ")
+        except Exception as e:
+            self.log(f"閲囬泦GPT杈撳叆妗嗘ā鏉垮け璐? {str(e)}")
+
+    def capture_gpt_send_button_template(self):
+        try:
+            self.capture_template("gpt_send_button.png", "璇烽€夋嫨 ChatGPT 鐨勫彂閫佹寜閽?)
+        except Exception as e:
+            self.log(f"閲囬泦GPT鍙戦€佹寜閽ā鏉垮け璐? {str(e)}")
+
+    def update_next_step_hint(self):
+        try:
+            if not self.鍚戝_skipped and self.鍚戝_step < len(self.wizard_steps()):
+                steps = self.wizard_steps()
+                step_info = steps[self.鍚戝_step - 1]
+                self.next_step_label.setText(f"鍚戝涓嬩竴姝? {step_info['title']} - {step_info['description']}")
+                self.next_step_label.setStyleSheet("background-color: #FFF3E0; padding: 10px; border-radius: 5px; font-weight: bold;")
+            else:
+                # 鍘熸潵鐨勪笅涓€姝ユ彁绀洪€昏緫
+                profile_dir = profile_manager.get_profile_dir()
+                if not profile_dir:
+                    self.next_step_label.setText("涓嬩竴姝ワ細璇烽€夋嫨鎴栨柊寤洪」鐩厤缃?)
+                    self.next_step_label.setStyleSheet("background-color: #E3F2FD; padding: 10px; border-radius: 5px; font-weight: bold;")
+                    return
+
+                input_template = profile_dir / "input_box_template.png"
+                send_template = profile_dir / "send_button_template.png"
+                coder_copy_template = profile_dir / "coder_copy_button.png"
+                gpt_input_template = profile_dir / "gpt_input_box.png"
+
+                if not input_template.exists():
+                    self.next_step_label.setText("涓嬩竴姝ワ細閲囬泦缂栫▼宸ュ叿杈撳叆妗?)
+                elif not coder_copy_template.exists():
+                    self.next_step_label.setText("涓嬩竴姝ワ細閲囬泦缂栫▼宸ュ叿澶嶅埗缁撴灉鎸夐挳")
+                elif not gpt_input_template.exists():
+                    self.next_step_label.setText("涓嬩竴姝ワ細閲囬泦 ChatGPT 杈撳叆妗?)
+                elif not send_template.exists():
+                    self.next_step_label.setText("涓嬩竴姝ワ細寤鸿閲囬泦鍙戦€佹寜閽紝鎴栦繚鎸?Enter 鍙戦€?)
+                else:
+                    self.next_step_label.setText("涓嬩竴姝ワ細杈撳叆鎻愮ず璇嶏紝鐒跺悗鐐瑰嚮涓€閿彂閫佸埌缂栫▼宸ュ叿")
+                self.next_step_label.setStyleSheet("background-color: #E3F2FD; padding: 10px; border-radius: 5px; font-weight: bold;")
+        except Exception as e:
+            self.log(f"鏇存柊涓嬩竴姝ユ彁绀哄け璐? {str(e)}")
+
+if __name__ == "__main__":
+    # 璁剧疆楂?DPI 鏀寔
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
+    QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
+    
+    app = QtWidgets.QApplication(sys.argv)
+    gui = BridgeGUI()
+    gui.show()
+    sys.exit(app.exec_())

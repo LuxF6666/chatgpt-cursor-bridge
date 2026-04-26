@@ -1,0 +1,251 @@
+--- pyperclip.copy --
+1666:                 pyperclip.copy(test_text)
+1924:                 pyperclip.copy(clean_text)
+2455:             pyperclip.copy(test_text)
+--- pyperclip.paste --
+1790:                 clipboard_text = pyperclip.paste()
+2456:             clipboard_content = pyperclip.paste()
+--- hotkey('ctrl', 'v') --
+1668:                 pyautogui.hotkey('ctrl', 'v')
+1843:                 pyautogui.hotkey('ctrl', 'v')
+1926:                 pyautogui.hotkey('ctrl', 'v')
+--- hotkey("ctrl", "v") --
+--- press('enter') --
+1867:                     pyautogui.press('enter')
+1870:                 pyautogui.press('enter')
+1946:                 pyautogui.press('enter')
+--- press("enter") --
+--- typewrite --
+1040:             self.log("警告: pyperclip 未安装，文本粘贴将使用 pyautogui.typewrite（不支持中文）")
+1671:                 pyautogui.typewrite(test_text)
+1672:                 self.log("步骤4: 已使用 pyautogui.typewrite 粘贴（不支持中文）")
+1846:                 pyautogui.typewrite("")
+1847:                 self.log("已使用 pyautogui.typewrite 粘贴（不支持中文）")
+1929:                 pyautogui.typewrite(clean_text)
+--- screenshot --
+0064:     统一截图函数：优先 mss > PIL.ImageGrab > pyautogui.screenshot
+0111:     # 3) pyautogui.screenshot
+0113:         pil_img = pyautogui.screenshot()
+0483:     def __init__(self, screenshot, screenshot_pil=None, log_fn=None):
+0485:         self.screenshot = screenshot
+0486:         self.screenshot_pil = screenshot_pil
+0497:         self.pixmap = self.convert_screenshot_to_pixmap()
+0501:     def convert_screenshot_to_pixmap(self):
+0502:         if self.screenshot_pil is not None:
+0503:             pm = pil_image_to_qpixmap(self.screenshot_pil, log_fn=self.log_fn)
+0506:         screenshot_rgb = cv2.cvtColor(self.screenshot, cv2.COLOR_BGR2RGB)
+0507:         height, width, channel = screenshot_rgb.shape
+0509:         q_image = QtGui.QImage(screenshot_rgb.data, width, height, bytes_per_line, QtGui.QImage.Format_RGB888)
+1437:             screenshot = capture_screen_pil(self.log if hasattr(self, "log") else None)
+1444:             if screenshot is None:
+1451:             self.log(f"截图成功，原图尺寸: {screenshot.size[0]}x{screenshot.size[1]}")
+1452:             selector = WindowedRegionSelector(screenshot, self)
+1510:     def take_screenshot(self):
+1531:                 screenshot = self.take_screenshot()
+1550:             res = cv2.matchTemplate(screenshot, template, cv2.TM_CCOEFF_NORMED)
+2440:             screenshot_pil = capture_screen_pil(log_fn=self.log)
+2441:             if screenshot_pil is None:
+2443:             self.log(f"✓ 屏幕截图: 成功 ({screenshot_pil.size}) 使用后端: {LAST_SCREENSHOT_BACKEND}")
+2444:             self.diagnostic_data.append(f"屏幕截图: 成功 ({screenshot_pil.size}) 使用后端: {LAST_SCREENSHOT_BACKEND}")
+--- capture_screen_pil --
+0062: def capture_screen_pil(log_fn=None):
+1437:             screenshot = capture_screen_pil(self.log if hasattr(self, "log") else None)
+1512:             pil_img = capture_screen_pil(log_fn=self.log)
+1514:                 raise RuntimeError("capture_screen_pil 返回 None")
+2440:             screenshot_pil = capture_screen_pil(log_fn=self.log)
+2442:                 raise RuntimeError("capture_screen_pil 返回 None")
+--- read_cv_image_unicode --
+0014: def read_cv_image_unicode(path):
+0022:         print(f"read_cv_image_unicode 失败: {str(e)}")
+1372:             img = read_cv_image_unicode(template_path)
+1483:             test_img = read_cv_image_unicode(template_path)
+1537:                 template = read_cv_image_unicode(template_path)
+2488:                     test_img = read_cv_image_unicode(template_path)
+--- find_template_with_score --
+1521:     def find_template_with_score(self, template_name, threshold=0.75):
+1566:         result = self.find_template_with_score(template_name, threshold)
+1595:         result = self.find_template_with_score(template_name)
+1642:         result = self.find_template_with_score("input_box_template.png")
+1704:         result = self.find_template_with_score("delete_popup.png")
+1769:         result = self.find_template_with_score("coder_copy_button.png")
+1822:         result = self.find_template_with_score("gpt_input_box.png")
+1860:                 gpt_send_result = self.find_template_with_score("gpt_send_button.png")
+1903:         result = self.find_template_with_score("input_box_template.png")
+1940:             send_result = self.find_template_with_score("send_button_template.png")
+1958:                     sandbox_result = self.find_template_with_score("sandbox_button.png")
+--- capture_template --
+0979:         self.capture_input_btn.clicked.connect(lambda: self.capture_template("input"))
+0980:         self.capture_send_btn.clicked.connect(lambda: self.capture_template("send"))
+0981:         self.capture_delete_btn.clicked.connect(lambda: self.capture_template("delete"))
+0982:         self.capture_sandbox_btn.clicked.connect(lambda: self.capture_template("sandbox"))
+0983:         self.capture_coder_copy_btn.clicked.connect(lambda: self.capture_template("coder_copy"))
+0984:         self.capture_gpt_input_btn.clicked.connect(lambda: self.capture_template("gpt_input"))
+0985:         self.capture_gpt_send_btn.clicked.connect(lambda: self.capture_template("gpt_send"))
+1406:     def capture_template(self, template_type):
+2910:             self.capture_template("input_box_template.png", "请选择编程工具的输入框")
+2916:             self.capture_template("send_button_template.png", "请选择编程工具的发送按钮")
+2922:             self.capture_template("coder_copy_button.png", "请选择编程工具的复制结果按钮")
+2928:             self.capture_template("gpt_input_box.png", "请选择 ChatGPT 的输入框")
+2934:             self.capture_template("gpt_send_button.png", "请选择 ChatGPT 的发送按钮")
+--- WindowedRegionSelector --
+0323: class WindowedRegionSelector(QtWidgets.QDialog):
+1452:             selector = WindowedRegionSelector(screenshot, self)
+--- one_click_send_to_coder --
+1005:         self.one_click_send_btn.clicked.connect(self.one_click_send_to_coder)
+2165:     def one_click_send_to_coder(self):
+--- one_click_return_to_gpt --
+1006:         self.one_click_return_btn.clicked.connect(self.one_click_return_to_gpt)
+2198:     def one_click_return_to_gpt(self):
+--- paste_to_gpt --
+1000:         self.paste_gpt_btn.clicked.connect(self.paste_to_gpt)
+1001:         self.copy_paste_gpt_btn.clicked.connect(self.copy_and_paste_to_gpt)
+1810:     def paste_to_gpt(self):
+1875:     def copy_and_paste_to_gpt(self):
+1884:         if not self.paste_to_gpt():
+2217:         self.copy_and_paste_to_gpt()
+--- copy_coder_result --
+0999:         self.copy_coder_btn.clicked.connect(self.copy_coder_result)
+1759:     def copy_coder_result(self):
+1878:         if not self.copy_coder_result():
+--- execute_command --
+1891:     def execute_command(self, cmd):
+2018:                         self.execute_command(cmd)
+2119:                     self.execute_command(cmd)
+--- safe_mode --
+0286:             return {"safe_mode": True, "gpt_safe_mode": True}
+0288:             return {"safe_mode": True, "gpt_safe_mode": True}
+0298:                 "safe_mode": getattr(self, 'safe_mode', True),
+0299:                 "gpt_safe_mode": getattr(self, 'gpt_safe_mode', True)
+0597:         self.safe_mode = True
+0598:         self.gpt_safe_mode = True
+0694:         self.safe_mode_checkbox = QtWidgets.QCheckBox("安全模式（只粘贴，不发送）")
+0695:         self.safe_mode_checkbox.setChecked(True)
+0698:         self.option_layout.addWidget(self.safe_mode_checkbox)
+0906:         self.gpt_safe_mode_checkbox = QtWidgets.QCheckBox("回传安全模式（只粘贴，不发送）")
+0907:         self.gpt_safe_mode_checkbox.setChecked(True)
+0912:         self.回传_layout.addWidget(self.gpt_safe_mode_checkbox)
+0976:         self.safe_mode_checkbox.stateChanged.connect(self.on_safe_mode_changed)
+1003:         self.gpt_safe_mode_checkbox.stateChanged.connect(self.on_gpt_safe_mode_changed)
+1037:         self.log(f"安全模式: {'开启' if self.safe_mode else '关闭'}")
+1038:         self.log(f"回传安全模式: {'开启' if self.gpt_safe_mode else '关闭'}")
+1085:             self.safe_mode = config.get("safe_mode", True)
+1086:             self.gpt_safe_mode = config.get("gpt_safe_mode", True)
+1087:             self.safe_mode_checkbox.blockSignals(True)
+1088:             self.safe_mode_checkbox.setChecked(self.safe_mode)
+1089:             self.safe_mode_checkbox.blockSignals(False)
+1090:             self.gpt_safe_mode_checkbox.blockSignals(True)
+1091:             self.gpt_safe_mode_checkbox.setChecked(self.gpt_safe_mode)
+1092:             self.gpt_safe_mode_checkbox.blockSignals(False)
+1108:             self.safe_mode = self.safe_mode_checkbox.isChecked()
+1109:             self.gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+1110:             profile_manager.safe_mode = self.safe_mode
+1111:             profile_manager.gpt_safe_mode = self.gpt_safe_mode
+1233:         if self.safe_mode_checkbox.isChecked():
+1239:     def on_safe_mode_changed(self):
+1240:         self.safe_mode = self.safe_mode_checkbox.isChecked()
+1245:     def on_gpt_safe_mode_changed(self):
+1246:         self.gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+1247:         mode_str = "安全模式" if self.gpt_safe_mode else "真实执行模式"
+1811:         safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+1812:         mode_str = "安全模式" if safe_mode else "真实执行模式"
+1855:         if safe_mode:
+1895:         safe_mode = self.safe_mode_checkbox.isChecked()
+1896:         mode_str = "安全模式" if safe_mode else "真实执行模式"
+1937:         if safe_mode:
+2148:         if self.safe_mode_checkbox.isChecked():
+2189:         if self.safe_mode_checkbox.isChecked():
+2522:             safe_mode = self.safe_mode_checkbox.isChecked()
+2523:             gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+2524:             self.log(f"✓ 安全模式: {'开启' if safe_mode else '关闭'}")
+2525:             self.log(f"✓ 回传安全模式: {'开启' if gpt_safe_mode else '关闭'}")
+2526:             self.diagnostic_data.append(f"安全模式: {'开启' if safe_mode else '关闭'}")
+2527:             self.diagnostic_data.append(f"回传安全模式: {'开启' if gpt_safe_mode else '关闭'}")
+--- gpt_safe_mode --
+0286:             return {"safe_mode": True, "gpt_safe_mode": True}
+0288:             return {"safe_mode": True, "gpt_safe_mode": True}
+0299:                 "gpt_safe_mode": getattr(self, 'gpt_safe_mode', True)
+0598:         self.gpt_safe_mode = True
+0906:         self.gpt_safe_mode_checkbox = QtWidgets.QCheckBox("回传安全模式（只粘贴，不发送）")
+0907:         self.gpt_safe_mode_checkbox.setChecked(True)
+0912:         self.回传_layout.addWidget(self.gpt_safe_mode_checkbox)
+1003:         self.gpt_safe_mode_checkbox.stateChanged.connect(self.on_gpt_safe_mode_changed)
+1038:         self.log(f"回传安全模式: {'开启' if self.gpt_safe_mode else '关闭'}")
+1086:             self.gpt_safe_mode = config.get("gpt_safe_mode", True)
+1090:             self.gpt_safe_mode_checkbox.blockSignals(True)
+1091:             self.gpt_safe_mode_checkbox.setChecked(self.gpt_safe_mode)
+1092:             self.gpt_safe_mode_checkbox.blockSignals(False)
+1109:             self.gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+1111:             profile_manager.gpt_safe_mode = self.gpt_safe_mode
+1245:     def on_gpt_safe_mode_changed(self):
+1246:         self.gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+1247:         mode_str = "安全模式" if self.gpt_safe_mode else "真实执行模式"
+1811:         safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+2523:             gpt_safe_mode = self.gpt_safe_mode_checkbox.isChecked()
+2525:             self.log(f"✓ 回传安全模式: {'开启' if gpt_safe_mode else '关闭'}")
+2527:             self.diagnostic_data.append(f"回传安全模式: {'开启' if gpt_safe_mode else '关闭'}")
+--- send_button_template.png --
+1341:             ("send_button_template.png", self.send_status_label, self.send_preview_label),
+1409:             "send": ("send_button_template.png", "编程工具发送按钮"),
+1574:             "send": "send_button_template.png",
+1940:             send_result = self.find_template_with_score("send_button_template.png")
+2474:             "send_button_template.png",
+2741:                 "template": "send_button_template.png"
+2853:                     elif template_name == "send_button_template.png":
+2916:             self.capture_template("send_button_template.png", "请选择编程工具的发送按钮")
+2954:                 send_template = profile_dir / "send_button_template.png"
+--- gpt_send_button.png --
+1346:             ("gpt_send_button.png", self.gpt_send_status_label, self.gpt_send_preview_label),
+1414:             "gpt_send": ("gpt_send_button.png", "ChatGPT 发送按钮"),
+1579:             "gpt_send": "gpt_send_button.png"
+1858:             gpt_send_path = self.get_template_path("gpt_send_button.png")
+1860:                 gpt_send_result = self.find_template_with_score("gpt_send_button.png")
+2479:             "gpt_send_button.png"
+2762:                 "template": "gpt_send_button.png"
+2859:                     elif template_name == "gpt_send_button.png":
+2934:             self.capture_template("gpt_send_button.png", "请选择 ChatGPT 的发送按钮")
+--- input_box_template.png --
+1340:             ("input_box_template.png", self.input_status_label, self.input_preview_label),
+1408:             "input": ("input_box_template.png", "编程工具输入框"),
+1573:             "input": "input_box_template.png",
+1621:         template_path = self.get_template_path("input_box_template.png")
+1642:         result = self.find_template_with_score("input_box_template.png")
+1903:         result = self.find_template_with_score("input_box_template.png")
+2037:         template_path = self.get_template_path("input_box_template.png")
+2039:             self.log("错误: 请先采集编程工具输入框模板 (input_box_template.png)")
+2071:         template_path = self.get_template_path("input_box_template.png")
+2073:             self.log("错误: 请先采集编程工具输入框模板 (input_box_template.png)")
+2173:         input_template = profile_dir / "input_box_template.png"
+2225:             ("input_box_template.png", "编程工具输入框"),
+2473:             "input_box_template.png",
+2734:                 "template": "input_box_template.png"
+2851:                     if template_name == "input_box_template.png":
+2910:             self.capture_template("input_box_template.png", "请选择编程工具的输入框")
+2953:                 input_template = profile_dir / "input_box_template.png"
+--- gpt_input_box.png --
+1345:             ("gpt_input_box.png", self.gpt_input_status_label, self.gpt_input_preview_label),
+1413:             "gpt_input": ("gpt_input_box.png", "ChatGPT 输入框"),
+1578:             "gpt_input": "gpt_input_box.png",
+1816:         template_path = self.get_template_path("gpt_input_box.png")
+1818:             self.log("粘贴失败: gpt_input_box.png 模板不存在")
+1822:         result = self.find_template_with_score("gpt_input_box.png")
+2201:         gpt_input_template = profile_dir / "gpt_input_box.png"
+2227:             ("gpt_input_box.png", "ChatGPT 输入框")
+2478:             "gpt_input_box.png",
+2755:                 "template": "gpt_input_box.png"
+2857:                     elif template_name == "gpt_input_box.png":
+2928:             self.capture_template("gpt_input_box.png", "请选择 ChatGPT 的输入框")
+2956:                 gpt_input_template = profile_dir / "gpt_input_box.png"
+--- coder_copy_button.png --
+1344:             ("coder_copy_button.png", self.coder_copy_status_label, self.coder_copy_preview_label),
+1412:             "coder_copy": ("coder_copy_button.png", "编程工具复制结果按钮"),
+1577:             "coder_copy": "coder_copy_button.png",
+1763:         template_path = self.get_template_path("coder_copy_button.png")
+1765:             self.log("复制失败: coder_copy_button.png 模板不存在")
+1769:         result = self.find_template_with_score("coder_copy_button.png")
+2200:         coder_copy_template = profile_dir / "coder_copy_button.png"
+2226:             ("coder_copy_button.png", "编程工具复制按钮"),
+2477:             "coder_copy_button.png",
+2748:                 "template": "coder_copy_button.png"
+2855:                     elif template_name == "coder_copy_button.png":
+2922:             self.capture_template("coder_copy_button.png", "请选择编程工具的复制结果按钮")
+2955:                 coder_copy_template = profile_dir / "coder_copy_button.png"
